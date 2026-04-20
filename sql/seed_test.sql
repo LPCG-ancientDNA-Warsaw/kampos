@@ -21,13 +21,13 @@ INSERT INTO lab_data.libraries (library_id, lab_id, material, times_extracted, l
 VALUES ('LIB_PL001_T1', 'PL001', 'T', 1, 'MM', '2024-05-14', '2024-05-15');
 
 INSERT INTO lab_data.indexing(library_id, sequencing_id, index_date, qPCR_date)
-VALUES ('LIB_P1_T1', 'NR102SS', '2024-05-17', '2024-05-18'),
-        ('LIB_P1_T1', 'NR103SS', '2024-05-22', '2024-05-23');
+VALUES ('LIB_PL001_T1', 'NR102SS', '2024-05-17', '2024-05-18'),
+        ('LIB_PL001_T1', 'NR103SS', '2024-05-22', '2024-05-23');
 
 INSERT INTO lab_data.sequencing_run(sequencing_id, sequencing_date)
 VALUES ('NR102SS', '2024-05-20'),
         ('NR103SS', '2024-05-25');
 
 INSERT INTO lab_data.sequencing_libraries(sequencing_id, library_id)
-VALUES ('NR102SS', 'LIB_P1_T1'),
-        ('NR103SS', 'LIB_P1_T1');
+VALUES ('NR102SS', 'LIB_PL001_T1'),
+        ('NR103SS', 'LIB_PL001_T1');
