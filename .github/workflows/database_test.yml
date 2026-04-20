@@ -1,15 +1,15 @@
 name: Database CI
 
-on: [push, pull_request]
+on: [push, pull_request] # Trigger
 
 jobs:
   test-db:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest # Where to run the test
     
     services:
       postgres:
         image: postgres:15
-        env:
+        env: # Environment variables
           POSTGRES_DB: lab_db
           POSTGRES_PASSWORD: password
         ports:
@@ -22,12 +22,19 @@ jobs:
 
     steps:
       - name: Code checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v3 # Clone code from Github Repository to the virual Linux machine
       
       - name: Install PostgreSQL Client
-        run: sudo apt-get install -y postgresql-client
+        run: sudo apt-get install -y postgresql-client # Install psql
 
       - name: Install schema
-        run: |
+        run:
           export PGPASSWORD='password'
           psql -h localhost -U postgres -d lab_db -f sql/schema.sql
+      
+      - name: Try the seed and show the result
+        run:
+          psql -h localhost -U postgres -d lab_db -f sql/seed.sql
+          
+          echo "--- VIEW SAMPLES_STATUS ---"
+          psql -h localhost -U postgres -d lab_db -c "SELECT * FROM lab_data.individuals_status;"
