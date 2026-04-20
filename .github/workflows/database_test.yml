@@ -1,0 +1,29 @@
+name: Database CI
+
+on: [push, pull_request]
+
+jobs:
+  test-db:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: lab_db
+          POSTGRES_PASSWORD: password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install schema
+        run: |
+          export PGPASSWORD='password'
+          psql -h localhost -U postgres -d lab_db -f sql/schema.sql

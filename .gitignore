@@ -1,0 +1,3 @@
+.env                # File with passwords
+__pycache__/        # Temporary Python files
+*.log               # Log files with sensible information
