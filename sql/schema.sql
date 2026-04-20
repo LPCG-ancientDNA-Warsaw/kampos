@@ -82,7 +82,7 @@ CREATE TABLE lab_data.sequencing_run (
 CREATE TABLE lab_data.sequencing_libraries(
     library_id TEXT NOT NULL,
     sequencing_id TEXT NOT NULL,
-    
+
     FOREIGN KEY (library_id)
         REFERENCES lab_data.libraries(library_id)
         ON UPDATE CASCADE,
@@ -207,32 +207,31 @@ SELECT
 
 FROM lab_data.individuals i
 
--- Connecting processed samples
-LEFT JOIN lab_data.processed_samples ps USING (lab_id)
+LEFT JOIN lab_data.processed_samples ps 
+    ON i.lab_id = ps.lab_id
 
--- Connecting extractions
 LEFT JOIN lab_data.dna_extractions de 
     ON ps.lab_id = de.lab_id AND ps.material = de.material
 
--- Connecting libraries
 LEFT JOIN lab_data.libraries lib 
     ON de.lab_id = lib.lab_id AND de.material = lib.material AND de.times_extracted = lib.times_extracted
 
--- Connecting sequencing
-LEFT JOIN lab_data.sequencing_libraries sl USING (library_id)
+LEFT JOIN lab_data.sequencing_libraries sl 
+    ON lib.library_id = sl.library_id
 
--- Connecting indexing
-LEFT JOIN lab_data.indexing ix
+LEFT JOIN lab_data.indexing ix 
     ON sl.library_id = ix.library_id AND sl.sequencing_id = ix.sequencing_id
 
--- Connecting runs dates
-LEFT JOIN lab_data.sequencing_run sr USING (sequencing_id)
+LEFT JOIN lab_data.sequencing_run sr 
+    ON sl.sequencing_id = sr.sequencing_id
 
-LEFT JOIN lab_data.dna_sequencing ds
-    ON sr.sequencing_id = ds.sequencing_id AND sr.library_id = ds.library_id
+LEFT JOIN lab_data.dna_sequencing ds 
+    ON sl.library_id = ds.library_id AND sl.sequencing_id = ds.sequencing_id
 
-LEFT JOIN lab_data.dna_mapping dm USING (fastq_name)
+LEFT JOIN lab_data.dna_mapping dm 
+    ON ds.fastq_name = dm.fastq_name
 
-LEFT JOIN lab_data.sex_estimation se USING (fastq_name)
+LEFT JOIN lab_data.sex_estimation se 
+    ON ds.fastq_name = se.fastq_name
 
 GROUP BY i.lab_id;
