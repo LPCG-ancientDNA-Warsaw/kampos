@@ -80,6 +80,9 @@ CREATE TABLE lab_data.sequencing_run (
 );
 
 CREATE TABLE lab_data.sequencing_libraries(
+    library_id TEXT NOT NULL,
+    sequencing_id TEXT NOT NULL,
+    
     FOREIGN KEY (library_id)
         REFERENCES lab_data.libraries(library_id)
         ON UPDATE CASCADE,
