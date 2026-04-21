@@ -2,3 +2,4 @@
 __pycache__/        # Temporary Python files
 *.log               # Log files with sensible information
 backups/            # Database backups
+sql/seed_db.sql

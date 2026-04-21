@@ -24,6 +24,14 @@ class LabDatabase:
         #### Still need to write it
         print(f"Upload of {len(df)} rows completed!")
 
+    def _rotate_backups(self, extension):
+        files = sorted(glob.glob(f"./backups/*{extension}"), key = os.path.getmtime)
+        
+        while len(files) > 3:
+            old_file = files.pop(0)
+            os.remove(old_file)
+            print(f"Old backup removed: {old_file}")
+
     def run_backup(self):
         """Executes the backup of the SQL file and exports the view "Individuals status"."""
         
@@ -55,13 +63,26 @@ class LabDatabase:
         self._rotate_backups(".sql")
         self._rotate_backups(".csv")
 
-    def _rotate_backups(self, extension):
-        files = sorted(glob.glob(f"./backups/*{extension}"), key = os.path.getmtime)
+
+    def export_full_excel_backup(self):
+        """Esporta l'intero database in un unico file Excel con più fogli."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+        excel_file = f"./backups/full_lab_backup_{timestamp}.xlsx"
         
-        while len(files) > 3:
-            old_file = files.pop(0)
-            os.remove(old_file)
-            print(f"Old backup removed: {old_file}")
+        # Elenco delle tabelle che vogliamo esportare
+        tables = ['sampling_sites', 'individuals', 'sequencing_libraries', 'dna_sequencing']
+        
+        # Usiamo ExcelWriter di Pandas per gestire più fogli
+        with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
+            for table_name in tables:
+                # Leggiamo la tabella dal DB
+                df = pd.read_sql(f"SELECT * FROM lab_data.{table_name}", self.engine)
+                # La scriviamo in un foglio dedicato
+                df.to_excel(writer, sheet_name=table_name, index=False)
+        
+        self._rotate_backups(".xlsx")
+        
+        print(f"📊 Backup Excel multi-foglio creato: {excel_file}")
 
 # Esempio di utilizzo
 if __name__ == "__main__":

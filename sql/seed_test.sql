@@ -32,5 +32,5 @@ INSERT INTO lab_data.indexing(library_id, sequencing_id, index_date, qPCR_date)
 VALUES ('LIB_PL001_T1', 'NR102SS', '2024-05-17', '2024-05-18'),
         ('LIB_PL001_T1', 'NR103SS', '2024-05-22', '2024-05-23');
 
-INSERT INTO lab_data.dna_sequencing (fastq_name, library_id, sequencing_id, fastq_path, raw_reads)
-VALUES ('PL001_T1_R1.fastq.gz', 'LIB_PL001_T1', 'NR102SS', '/path/to/PL001_T1_R1.fastq.gz', 1500000);
+INSERT INTO lab_data.dna_sequencing (fastq_path_r1, fastq_path_r2, fastq_name, library_id, sequencing_id, fastq_folder, raw_reads)
+VALUES ('/path/to/PL001_T1_R1.fastq.gz', '/path/to/PL001_T1_R2.fastq.gz', 'PL001_T1', 'LIB_PL001_T1', 'NR102SS', '/path/to/', 1500000);
