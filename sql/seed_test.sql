@@ -7,17 +7,17 @@ INSERT INTO lab_data.individuals (lab_id, site_name, project_id)
 VALUES ('PL001', 'Imaginary Land', 'Project-test');
 
 
-INSERT INTO lab_data.processed_samples (lab_id, material, prep_operator, prep_date) 
+INSERT INTO lab_data.processed_samples (lab_id, material_id, prep_operator, prep_date) 
 VALUES ('PL001', 'T', 'FL', '2024-04-20'),
        ('PL001', 'A', 'FL', '2024-04-24');
 
 
-INSERT INTO lab_data.dna_extractions (lab_id, material, times_extracted, extract_date) 
+INSERT INTO lab_data.dna_extractions (lab_id, material_id, times_extracted, extract_date) 
 VALUES ('PL001', 'T', 1, '2024-05-01'),
        ('PL001', 'T', 2, '2024-05-10');
 
 
-INSERT INTO lab_data.libraries (library_id, lab_id, material, times_extracted, library_operator, library1_date, elution_date)
+INSERT INTO lab_data.libraries (library_id, lab_id, material_id, times_extracted, library_operator, library1_date, elution_date)
 VALUES ('LIB_PL001_T1', 'PL001', 'T', 1, 'MM', '2024-05-14', '2024-05-15');
 
 INSERT INTO lab_data.sequencing_run(sequencing_id, sequencing_date)
