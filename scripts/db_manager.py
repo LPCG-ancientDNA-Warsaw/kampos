@@ -1,6 +1,8 @@
 import os
 import pandas as pd
 from sqlalchemy import create_engine
+from sqlalchemy import event
+import sqlalchemy
 from dotenv import load_dotenv  # Can read the .env file
 import subprocess               # For the backup system
 import glob
@@ -15,14 +17,67 @@ class LabDatabase:
         self.host = os.getenv("DB_HOST")
         self.port = os.getenv("DB_PORT")
         self.db_name = os.getenv("DB_NAME")
-        
         self.url = f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.db_name}"
+
         self.engine = create_engine(self.url)
 
-    def upload_from_excel(self, csv_path):
-        df = pd.read_csv(csv_path)
-        #### Still need to write it
-        print(f"Upload of {len(df)} rows completed!")
+    def check_sites_from_individuals(self, dataframe):
+        with self.engine.connect() as conn:
+            dataframe_sampling_sites = dataframe['site_name'].unique()
+
+            existing_sites_database = pd.read_sql("SELECT site_name FROM lab_data.sampling_sites", conn)
+            existing_sites = existing_sites_database['site_name'].tolist()
+
+            new_sites_added = False
+            
+            for site in dataframe_sampling_sites:
+                if pd.isna(site): 
+                    continue
+
+                elif site not in existing_sites:
+                    print(f"Sampling site '{site}' not found in Sampling Sites table. Creating entry...")
+                    conn.execute(sqlalchemy.text("INSERT INTO lab_data.sampling_sites (site_name) VALUES (:s)"), {"s": site})
+                    print(f"Sampling site '{site}' added to Sampling Sites table. Country automatically set to 'Poland'. Remember to add additional information.")
+                    new_sites_added = True
+                
+                else: continue
+                
+            if new_sites_added:
+                conn.commit()
+
+
+    def upload_from_excel(self, xlsx_path):
+        # Parse full Excel file
+        excel_file = pd.ExcelFile(xlsx_path)
+        # Recover the sheets names (stores them in a list)
+        sheets = excel_file.sheet_names
+
+        with self.engine.connect() as conn:
+            # Parses each sheet of the Excel file
+            for sheet in sheets:
+                # Creates a DataFrame for each sheet
+                data = pd.read_excel(xlsx_path, sheet_name = sheet)
+                data = data.where(pd.notnull(data), None)
+
+                # Checks if in the database there is a Table with the same name as the sheet name
+                if self.engine.dialect.has_table(conn, sheet, schema = 'lab_data'):
+                    # If yes, tries to append the new data
+                    try:
+                        # SAFE CHECKS FOR MISSING SAMPLING SITES
+                        if sheet == "individuals":
+                            self.check_sites_from_individuals(data)
+
+                        data.to_sql(sheet, con = self.engine, schema = 'lab_data', if_exists = 'append', index = False)
+                        conn.commit()
+
+                        print(f"Table {sheet} updated correctly")
+                    except Exception as ex:
+                        conn.rollback()
+                        print(f"Error during upload of table {sheet}")
+                else:
+                    print(f"Error: Database {self.db_name} has no table called '{sheet}'.")
+
+        print(f"Upload completed!")
 
     def _rotate_backups(self, extension):
         files = sorted(glob.glob(f"./backups/*{extension}"), key = os.path.getmtime)
@@ -86,5 +141,9 @@ class LabDatabase:
 
 # Esempio di utilizzo
 if __name__ == "__main__":
-    db = LabDatabase()
-    print("Connessione stabilita con successo!")
+    
+    try:
+        db = LabDatabase()
+        print(f"Connection to the {db.host} for user {db.user} created successfully.")
+    except Exception as ex:
+        print(f"Connection could not be created due to the following error:\n", ex)
