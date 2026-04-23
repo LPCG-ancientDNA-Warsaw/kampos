@@ -164,8 +164,6 @@ CREATE TABLE lab_data.sex_estimation (
     PRIMARY KEY (fastq_name)
 );
 
-
--- Quickly check samples status
 CREATE OR REPLACE VIEW lab_data.individuals_status AS
 SELECT 
     i.lab_id, 
@@ -174,23 +172,21 @@ SELECT
     -- 2. Count
     COUNT(DISTINCT de.times_extracted) AS num_extractions,
     COUNT(DISTINCT sl.sequencing_id) AS times_sequenced,
-    -- 3. Extractions (es: "PL626T ext.1 (2024-05-01)")
-    STRING_AGG(DISTINCT ps.lab_id || ps.material_id || ' ext.' || de.times_extracted || ' (' || de.extract_date::TEXT || ')', ' | ') AS extract_dates,
-    STRING_AGG(DISTINCT ps.lab_id || ps.material_id || ' ext.' || de.times_extracted || ' (' || de.UDG_date::TEXT || ')', ' | ') AS udg_dates,
-    -- 4. Libraries (es: "LIB001 (2024-06-01)")
-    STRING_AGG(DISTINCT lib.library_id || ' (' || lib.library1_date::TEXT || ')', ' | ') AS library_dates,
-    STRING_AGG(DISTINCT lib.library_id || ' (' || lib.elution_date::TEXT || ')', ' | ') AS elution_dates,
-    -- 5. Indexing & qPCR
-    STRING_AGG(DISTINCT lib.library_id || ' [' || ix.sequencing_id || '] (' || ix.index_date::TEXT || ')', ' | ') AS index_dates,
-    STRING_AGG(DISTINCT lib.library_id || ' [' || ix.sequencing_id || '] (' || ix.qPCR_date::TEXT || ')', ' | ') AS qpcr_dates,
-    -- 6. Sequencing Runs
-    STRING_AGG(DISTINCT sr.sequencing_id || ' (' || sr.sequencing_date::TEXT || ')', ' | ') AS sequencing_run_dates,
-    -- 7. Analisi (es: "LIB001-RUN01: 5.4%")
-    STRING_AGG(DISTINCT ds.library_id || '-' || ds.sequencing_id || ': ' || ds.fastq_path_r1, ', ') AS fastq_path_r1,
-    STRING_AGG(DISTINCT ds.library_id || '-' || ds.sequencing_id || ': ' || ds.raw_reads::TEXT, ', ') AS raw_reads_info,
-    STRING_AGG(DISTINCT dm.fastq_name || ': ' || dm.tot_reads_map::TEXT, ', ') AS mapped_reads_info,
-    STRING_AGG(DISTINCT dm.fastq_name || ': ' || dm.endo_dna::TEXT || '%', ', ') AS endo_dna_info,
-    STRING_AGG(DISTINCT se.fastq_name || ': ' || se.assignment, ', ') AS sex_info
+    -- 3. Extractions: DATA (Materiale ext.N)
+    STRING_AGG(DISTINCT de.extract_date::TEXT || ' (' || i.lab_id || ps.material_id || de.times_extracted || ')', ' | ') AS extract_dates,
+    STRING_AGG(DISTINCT COALESCE(de.udg_date::TEXT, 'No UDG') || ' (' || i.lab_id || ps.material_id || de.times_extracted || ')', ' | ') AS udg_dates,
+    -- 4. Libraries: DATA (Library_ID)
+    STRING_AGG(DISTINCT lib.library1_date::TEXT || ' (' || lib.library_id || ')', ' | ') AS library_dates,
+    STRING_AGG(DISTINCT lib.elution_date::TEXT || ' (' || lib.library_id || ')', ' | ') AS elution_dates,
+    -- 5. Indexing & qPCR: DATA (Library_ID [Seq_ID])
+    STRING_AGG(DISTINCT ix.index_date::TEXT || ' (' || lib.library_id || ' [' || ix.sequencing_id || '])', ' | ') AS index_dates,
+    STRING_AGG(DISTINCT ix.qpcr_date::TEXT || ' (' || lib.library_id || ' [' || ix.sequencing_id || '])', ' | ') AS qpcr_dates,
+    -- 6. Sequencing Runs: DATA (Run_ID)
+    STRING_AGG(DISTINCT sr.sequencing_date::TEXT || ' (' || sr.sequencing_id || ')', ' | ') AS sequencing_run_dates,
+    -- 7. Analysis
+    STRING_AGG(DISTINCT ds.raw_reads::TEXT || ' (' || ds.library_id || ')', ' | ') AS raw_reads_info,
+    STRING_AGG(DISTINCT dm.endo_dna::TEXT || '% (' || dm.fastq_name || ')', ' | ') AS endo_dna_info,
+    STRING_AGG(DISTINCT se.assignment || ' (' || se.fastq_name || ')', ' | ') AS sex_info
 FROM lab_data.individuals i
 LEFT JOIN lab_data.processed_samples ps 
     ON i.lab_id = ps.lab_id
@@ -211,3 +207,4 @@ LEFT JOIN lab_data.dna_mapping dm
 LEFT JOIN lab_data.sex_estimation se 
     ON ds.fastq_name = se.fastq_name
 GROUP BY i.lab_id;
+
