@@ -1,0 +1,16 @@
+Bootstrap: docker
+From: python:3.11
+
+%post
+    apt-get update && apt-get install -y git
+    pip install --upgrade pip
+
+    git clone https://github.com/tuo-user/mytool.git
+    cd mytool
+    pip install .
+
+    apt-get update && apt-get install -y git wget nextflow
+    pip install pandas sqlalchemy psycopg2-binary streamlit plotly
+
+%runscript
+    exec mytool "$@"
