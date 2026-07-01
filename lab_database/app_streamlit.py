@@ -216,7 +216,7 @@ def edit_entries():
                     st.success("Database updated!")
                     # Aggiorniamo la memoria interna con i nuovi dati salvati
                     st.session_state.df_to_edit = edited_df.copy()
-                    st.cache_data.clear() # Svuota il cache per le altre pagine
+                    st.cache_data.clear()
     else:
         st.text("Please select one option to start editing.")
 
@@ -279,7 +279,8 @@ def backup():
         with st.spinner("Generating backup files..."):
             db.run_backup()
             st.success("Backup SQL, CSV and XLSX correctly generated!")
-            st.rerun() # Ricarica la pagina per vedere i nuovi file nei popover
+            st.cache_data.clear()
+            st.rerun() 
 
 def sample_view():
     st.title("🧬 Sample Detailed View")

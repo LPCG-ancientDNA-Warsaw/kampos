@@ -12,7 +12,7 @@ except ImportError:
 def get_user_config(user):
     """Carica la regex dell'utente dal file JSON."""
     # Assumiamo che il file sia nella stessa cartella del tool
-    config_path = os.path.join(os.path.dirname(__file__), "..", "users_config.json")
+    config_path = os.path.join(os.path.dirname(__file__), "..", "config.json")
     try:
         with open(config_path, 'r') as f:
             configs = json.load(f)

@@ -1,0 +1,35 @@
+{
+  "database": {
+    "schema": "lab_data",
+    "hierarchies": {
+      "individuals": {
+        "parent": "sampling_sites",
+        "join_on": "site_name"
+      },
+      "indexing": {
+        "parent": "sequencing_runs",
+        "join_on": "sequencing_id"
+      }
+    },
+    "default_values": {
+      "country": "Poland",
+      "extract_method": "Rohland et al. 2018",
+      "lysis_method": "Rohland et al. 2018",
+      "library_type": "Single",
+      "index_method": "Cx, XX ul",
+      "qPCR_method": "AA Biotech",
+      "shotgun_enriched": "No",
+      "merged": "FALSE"
+    }
+  },
+  "users": {
+    "flavia": {
+      "regex": "^([A-Z]{2}\\d{3})([A-Z]\\d+)([A-Z]\\d+)([a-z]+)_(.*)_(.*)$",
+      "groups": ["lab_id", "material_ext", "lib_seq_type", "udg", "enrichment", "seq_run_id"]
+    },
+    "prof_x": {
+      "regex": "^ID_(\\d+)_.*",
+      "groups": ["lab_id"]
+    }
+  }
+}

@@ -89,56 +89,7 @@ class LabDatabase:
             WHERE i.project_id = :pid
         """)
         return pd.read_sql(query, self.engine, params={"pid": project_id})
-
-    def check_sites_from_individuals(self, dataframe, conn):
-        """
-        This function checks for sampling sites (parent table) information when uploading individuals (child table).
-        If any new sites are present, they are added and committed to the server. 
-
-        Input:
-        - dataframe: a pandas DataFrame object (that contains a column named 'site_name');
-        - conn: an established connection with the database of interest (sqlalchemy create_engine()).
-
-        Output:
-        - Pass
-        """
-
-        # Extract sampling sites names from the DataFrame
-        dataframe_sampling_sites = dataframe['site_name'].unique() 
-
-        # Extract sampling sites names from Database
-        existing_sites = set(pd.read_sql("SELECT site_name FROM lab_data.sampling_sites", conn)['site_name'].tolist())
-
-        # Flag to check for updates (default: False)
-        new_sites_added = False
-        
-        # Parses through the sites provided by the DataFrame
-        for site in dataframe_sampling_sites:
-            # If it is empty, skips it
-            if pd.isna(site): 
-                continue
-            
-            # If the site is not empty, but not present in the database...
-            elif site not in existing_sites:
-                print(f"Sampling site '{site}' not found in Sampling Sites table. Creating entry...")
-
-                # ... adds it to the database...
-                conn.execute(sqlalchemy.text("INSERT INTO lab_data.sampling_sites (site_name) VALUES (:s)"), {"s": site})
-                print(f"Sampling site '{site}' added to Sampling Sites table. Country automatically set to 'Poland'. Remember to add additional information.")
-
-                # ... and activates the flag for database updates.
-                new_sites_added = True
-            
-            # Id the site is already in the database, skips it
-            else: continue
-        
-        # If the flag for database updates was activated, the changes are committed to the database.
-        if new_sites_added:
-            conn.commit()
-        
-        pass
-
-
+    
     def get_primary_keys(self, table_name, schema='lab_data'):
         """
         Recupera dinamicamente i nomi delle colonne che compongono 
@@ -147,6 +98,62 @@ class LabDatabase:
         inspector = inspect(self.engine)
         pk_columns = inspector.get_pk_constraint(table_name, schema)
         return pk_columns.get('constrained_columns', [])
+
+    def check_parent_from_child(self, parent_name, child_dataframe, conn, schema='lab_data'):
+        """
+        This function checks for parent table information when uploading child table information.
+        If any new rows are present, they are added and committed to the server.
+
+        Input:
+        - parent_name: name of the parent table;
+        - child_datframe: a pandas DataFrame object with child table information;
+        - conn: an established connection with the database of interest (sqlalchemy create_engine());
+        - schema: name of the schema that contains the tables.
+
+        Output:
+        - Pass
+        """
+        # 1. Recupera i nomi delle colonne della Primary Key del parent
+        pk_columns = self.get_primary_keys(parent_name, schema)
+        if not pk_columns:
+            print(f"Error: No primary key found for: {parent_name}")
+            return
+
+        # 2. Remove duplicates from child info
+        child_entries = child_dataframe[pk_columns].drop_duplicates().dropna()
+
+        # Get information from parent child, only primary keys columns.
+        cols_str = ", ".join(pk_columns)
+        existing_parent_data = pd.read_sql(f"SELECT {cols_str} FROM {schema}.{parent_name}", conn)
+
+        # Convert data in tuples sets. If there is only one Primary key, the tuple is of format (val,)
+        existing_set = set(tuple(x) for x in existing_parent_data.to_records(index=False))
+
+        new_rows_added = False
+
+        # For loop to each row of the new child dataframe
+        for _, row in child_entries.iterrows():
+            current_entry = tuple(row[col] for col in pk_columns)
+
+            if current_entry not in existing_set:
+                print(f"Entry {current_entry} not found in parent table '{parent_name}'. Creating entry...")
+
+                # Building the query
+                placeholders = ", ".join([f":{col}" for col in pk_columns])
+                insert_sql = f"INSERT INTO {schema}.{parent_name} ({cols_str}) VALUES ({placeholders})"
+                
+                params = {col: row[col] for col in pk_columns}
+                conn.execute(sqlalchemy.text(insert_sql), params)
+                new_rows_added = True
+
+        # 6. Final commit if there is any change in the dataset
+        if new_rows_added:
+            conn.commit()
+            print(f"Updated the database on table '{parent_name}'. Please remember to check later the newly added information.")
+        else:
+            print(f"No new row for table '{parent_name}'.")
+        
+
 
     def safe_update_table(self, table_name, edited_df, schema='lab_data'):
         """
@@ -260,7 +267,7 @@ class LabDatabase:
             'index_method': 'Cx, XX ul',
             'qPCR_method': 'AA Biotech',
             'shotgun_enriched': 'No',
-            'merged': 'No'
+            'merged': 'FALSE'
             }
 
         # Opens connection to the database
@@ -289,9 +296,9 @@ class LabDatabase:
                     if self.engine.dialect.has_table(conn, sheet, schema = 'lab_data'):
                         # If yes, tries to append the new data
                         try:
-                            # SAFE CHECKS FOR MISSING SAMPLING SITES
-                            if sheet == "individuals":
-                                self.check_sites_from_individuals(data, conn)
+                            
+                            if sheet == "individuals" or sheets == "indexing":
+                                self.check_parent_from_child(parent_name = sheet, child_dataframe=data, conn=conn) 
 
                             print(f"Attempting to insert {len(data)} rows into {sheet}...")
 
