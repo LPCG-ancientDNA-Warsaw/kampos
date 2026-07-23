@@ -1,7 +1,7 @@
 import os
 import re
 import json
-from lab_database.db_manager import LabDatabase
+from kampos.db_manager import LabDatabase
 
 # Gestione Pysam (per evitare crash su Windows)
 try:

@@ -2,30 +2,41 @@ import os
 import pandas as pd
 from sqlalchemy import create_engine, event, inspect, text
 import sqlalchemy
-from dotenv import load_dotenv  # Can read the .env file
+from collections import deque
 import subprocess               # For the backup system
 import shutil
 import glob
 from datetime import datetime
+import json
+from pathlib import Path
 
-load_dotenv()
+
 
 class LabDatabase:
-    def __init__(self):
-        self.user = os.getenv("DB_USER")
-        self.password = os.getenv("DB_PASSWORD")
-        self.host = os.getenv("DB_HOST")
-        self.port = os.getenv("DB_PORT")
-        self.db_name = os.getenv("DB_NAME")
-        self.url = f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.db_name}"
+    def __init__(self, user, password):
+        config_path = Path(__file__).resolve().parent.parent / 'config.json'
 
-        self.engine = create_engine(self.url)
-    
-    def get_column_values(self, table, schema = 'lab_data', columns='all'):
+        with open(config_path, 'r', encoding = 'utf-8') as f:
+            self.config = json.load(f)
+
+        self.db_name = self.config["database"]["db_name"]
+        self.host = self.config["database"]["host"]
+        self.port = self.config["database"]["port"]
+        self.schema = self.config["database"]["schema"]  #  atm supports the presence of only one schema per db
+
+        if user and password:
+            self.url = f"postgresql://{user}:{password}@{self.host}:{self.port}/{self.db_name}"
+            self.engine = create_engine(self.url)
+
+    def get_column_values(self, table, schema = None, columns='all'):
+        if schema is None:
+            schema = self.schema 
+        
         with self.engine.connect() as conn:
             try:
                 if columns == 'all':
-                    result = pd.read_sql(f"SELECT * FROM lab_data.{table}", conn)
+                    result = pd.read_sql(f"SELECT * FROM {schema}.{table}", conn)
+                    return result
                 
                 if isinstance(columns, list):
                     if len(columns) == 1:
@@ -51,26 +62,162 @@ class LabDatabase:
                 print(f"Error with the database: {e}")
                 return None
             
+    def _build_join_graph(self):
+        """
+        Build a graph of table relationships based on foreign keys.
+        Returns a dictionary where keys are table names and values are lists of tuples.
+        """
 
-    
-    def get_sample_details(self, lab_id):
-        query = text("""
-            SELECT 
-                i.*, ps.material_id,
-                ps.material_description, ps.prep_date, ps.prep_operator,
-                de.extract_date, de.extract_operator, de.extract_method,
-                lib.library_id, lib.library_type, lib.library_operator,
-                ds.fastq_name, ds.raw_reads,
-                dm.endo_dna, dm.tot_reads_map
-            FROM lab_data.individuals i
-            LEFT JOIN lab_data.processed_samples ps ON i.lab_id = ps.lab_id
-            LEFT JOIN lab_data.dna_extractions de ON i.lab_id = de.lab_id
-            LEFT JOIN lab_data.libraries lib ON i.lab_id = lib.lab_id
-            LEFT JOIN lab_data.dna_sequencing ds ON lib.library_id = ds.library_id
-            LEFT JOIN lab_data.dna_mapping dm ON ds.fastq_name = dm.fastq_name
-            WHERE i.lab_id = :id
-        """)
-        return pd.read_sql(query, self.engine, params={"id": lab_id})
+        # Inspector retrieves metadata from the database.
+        inspector = inspect(self.engine)
+
+        graph = {}
+
+        # For each table name obtained through the metadata...
+        for table_name in inspector.get_table_names(schema=self.schema):
+            # ... add the table name to the graph dictionary and set an empty list as its value
+            graph[table_name] = []
+
+            # For each foreign key in that table...
+            for fk in inspector.get_foreign_keys(table_name, schema=self.schema):
+
+                source_table = table_name
+                target_table = fk['referred_table']
+                source_columns = fk.get('constrained_columns', [])
+                target_columns = fk.get('referred_columns', [])
+
+                if not source_columns or not target_columns:
+                    continue
+
+                graph[source_table].append((target_table, source_columns, target_columns))
+                graph[target_table].append((source_table, target_columns, source_columns))
+
+        return graph
+
+    def _find_join_path(self, graph, start, target):
+        """ This function finds the shortest path between two tables in the join graph. """
+
+        # CASE 1: If the start and target are the same, return an empty path
+        if start == target:
+            return []
+
+        # This library helps to implement a queue for the breadth-first search (BFS) algorithm which is used to find the shortest paths in graphs
+        queue = deque([(start,[])])
+        visited = {start}
+
+        # If a queue exists...
+        while queue:
+            # We remove the next item, which we call "current", in front of the queue
+            current, path = queue.popleft()
+
+            # Then we continue searching: each time we visit a table we add it in the queue and visited
+            for next, left_cols, right_cols in graph.get(current, []):
+
+                # If a table was already visited, we skip it to avoid cycles in the graph
+                if next in visited:
+                    continue
+
+                new_path = path + [(next, left_cols, right_cols)]
+
+                if next == target:
+                    return new_path
+
+                queue.append((next, new_path))
+                visited.add(next)
+
+        return None
+
+    def _build_sample_details_query(self, lab_id):
+        mapping = self.config["database"]["mapping"]
+
+        # We use individual_id as the base column for the query (we use .get to avoid crashing)
+        base_entry = mapping.get("individual_id", {})
+
+        base_table = base_entry.get("base_table")
+        base_key_col = base_entry.get("column_name")
+
+        if not any([base_table, base_key_col]):
+            raise ValueError("mapping['individual_id'] information is required. Please check config.json.")
+
+        graph = self._build_join_graph()
+
+        select_parts = []
+        join_parts = []
+        seen_joins = set()
+
+        # base column
+        select_parts.append(f"base.{base_key_col} AS individual_id")
+
+        requested_fields = [
+            "individual_id",
+            "material_id",
+            "prep_date",
+            "extract_date",
+            "library_id",
+            "raw_reads",
+            "endo_dna",
+            "tot_reads_map"
+        ]
+
+        # add all mapped fields
+        for concept, info in mapping.items():
+            if concept in requested_fields:
+                target_table = info.get("base_table")
+                target_column = info.get("column_name")
+
+                if not target_table or not target_column:
+                    continue
+
+                # if the field is in the base table, select it directly
+                if target_table == base_table:
+                    select_parts.append(f"base.{target_column} AS {concept}")
+                    continue
+
+                # find the path from base table to target table
+                path = self._find_join_path(graph, base_table, target_table)
+                if path is None:
+                    raise ValueError(f"No join path found between {base_table} and {target_table}")
+
+                current_alias = "base"
+                current_table = base_table
+
+                for next_table, left_cols, right_cols in path:
+                    if not left_cols or not right_cols:
+                        continue
+
+                    join_key = (current_table, next_table)
+                    if join_key not in seen_joins:
+                        join_conditions = []
+                        for left_col, right_col in zip(left_cols, right_cols):
+                            join_conditions.append(
+                                f"{current_alias}.{left_col} = {next_table}.{right_col}"
+                            )
+
+                        join_parts.append(
+                            f"LEFT JOIN {self.schema}.{next_table} AS {next_table} "
+                            f"ON {' AND '.join(join_conditions)}"
+                        )
+                        seen_joins.add(join_key)
+
+                    current_alias = next_table
+                    current_table = next_table
+
+                select_parts.append(f"{target_table}.{target_column} AS {concept}")
+
+            sql = f"""
+                SELECT
+                    {', '.join(select_parts)}
+                FROM {self.schema}.{base_table} AS base
+                {' '.join(join_parts)}
+                WHERE base.{base_key_col} = :id
+            """
+
+        return text(sql)
+
+
+    def get_sample_details(self, individual_id):
+        query = self._build_sample_details_query(individual_id)
+        return pd.read_sql(query, self.engine, params={"individual_id": individual_id})
     
     def get_project_stats(self, project_id):
         query = text("""
@@ -90,16 +237,19 @@ class LabDatabase:
         """)
         return pd.read_sql(query, self.engine, params={"pid": project_id})
     
-    def get_primary_keys(self, table_name, schema='lab_data'):
+    def get_primary_keys(self, table_name, schema=None):
         """
         Recupera dinamicamente i nomi delle colonne che compongono 
         la Primary Key di una tabella.
         """
+        if schema is None:
+            schema = self.schema 
+
         inspector = inspect(self.engine)
         pk_columns = inspector.get_pk_constraint(table_name, schema)
         return pk_columns.get('constrained_columns', [])
 
-    def check_parent_from_child(self, parent_name, child_dataframe, conn, schema='lab_data'):
+    def check_parent_from_child(self, parent_name, child_dataframe, conn, schema=None):
         """
         This function checks for parent table information when uploading child table information.
         If any new rows are present, they are added and committed to the server.
@@ -113,6 +263,8 @@ class LabDatabase:
         Output:
         - Pass
         """
+        if schema is None:
+            schema = self.schema 
         # 1. Recupera i nomi delle colonne della Primary Key del parent
         pk_columns = self.get_primary_keys(parent_name, schema)
         if not pk_columns:
@@ -155,11 +307,14 @@ class LabDatabase:
         
 
 
-    def safe_update_table(self, table_name, edited_df, schema='lab_data'):
+    def safe_update_table(self, table_name, edited_df, schema=None):
         """
         Aggiorna la tabella nel database mantenendo i vincoli.
         Usa 'to_sql' con un approccio temporaneo per evitare di rompere le Foreign Keys.
         """
+        if schema is None:
+            schema = self.schema 
+
         if edited_df.empty:
             return True
 
@@ -201,8 +356,8 @@ class LabDatabase:
 
                 if not columns_to_update:
                     upsert_query = f"""
-                        INSERT INTO lab_data.{table_name} ({col_names})
-                        SELECT {select_clause} FROM lab_data.{staging_name}
+                        INSERT INTO {schema}.{table_name} ({col_names})
+                        SELECT {select_clause} FROM {schema}.{staging_name}
                         ON CONFLICT ({pk_constraint}) DO NOTHING;
                     """
                 else:
@@ -225,15 +380,15 @@ class LabDatabase:
                     
                     # 3. Componiamo la query
                     upsert_query = f"""
-                        INSERT INTO lab_data.{table_name} ({col_names})
-                        SELECT {select_clause} FROM lab_data.{staging_name}
+                        INSERT INTO {schema}.{table_name} ({col_names})
+                        SELECT {select_clause} FROM {schema}.{staging_name}
                         ON CONFLICT ({pk_constraint}) 
                         DO UPDATE SET {set_clause_sql};
                     """
                 
                 conn.execute(text(upsert_query))
 
-                conn.execute(text(f"DROP TABLE lab_data.{staging_name}"))
+                conn.execute(text(f"DROP TABLE {schema}.{staging_name}"))
                 
             return True
         except Exception as e:
@@ -241,7 +396,7 @@ class LabDatabase:
             return False
 
 
-    def upload_from_excel(self, xlsx_path):
+    def upload_from_excel(self, xlsx_path, schema=None):
         """
         This function uploads on the database the information provided through an Excel File.
 
@@ -251,6 +406,9 @@ class LabDatabase:
         Ouput:
         - Pass
         """
+        if schema is None:
+            schema = self.schema
+            
         # Parse full Excel file
         excel_file = pd.ExcelFile(xlsx_path)
         # Recover the sheets names (stores them in a list)
@@ -293,11 +451,11 @@ class LabDatabase:
                     data = data.where(pd.notnull(data), None)
 
                     # Checks if in the database there is a Table with the same name as the sheet name
-                    if self.engine.dialect.has_table(conn, sheet, schema = 'lab_data'):
+                    if self.engine.dialect.has_table(conn, sheet, schema = schema):
                         # If yes, tries to append the new data
                         try:
                             
-                            if sheet == "individuals" or sheets == "indexing":
+                            if sheet == "individuals" or sheet == "indexing":
                                 self.check_parent_from_child(parent_name = sheet, child_dataframe=data, conn=conn) 
 
                             print(f"Attempting to insert {len(data)} rows into {sheet}...")
@@ -352,7 +510,7 @@ class LabDatabase:
         
         pass
 
-    def get_tables_names(self):
+    def get_tables_names(self, schema = None):
         """
         Obtain tables names from the database.
 
@@ -362,9 +520,12 @@ class LabDatabase:
         Output:
         - a list of tables names.
         """
+        if schema is None:
+            schema = self.schema
 
         inspector = inspect(self.engine)
-        tables = [x for x in inspector.get_table_names(schema = 'lab_data')]
+
+        tables = [x for x in inspector.get_table_names(schema = schema)]
         
         return tables
 

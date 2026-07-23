@@ -1,5 +1,5 @@
 .env
-lab_database/commands/__pycache__/
+kampos/commands/__pycache__/
 *.log
 backups/
 sql/seed_db.sql

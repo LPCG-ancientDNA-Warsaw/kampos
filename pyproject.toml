@@ -1,5 +1,5 @@
 [project]
-name = "mytool"
+name = "kampos"
 version = "0.1.0"
 dependencies = [
     "pandas>=2.2.0",
@@ -10,4 +10,4 @@ dependencies = [
 ]
 
 [project.scripts]
-mytool = "mytool.cli:main”
+kampos = "kampos.cli:main”

@@ -7,29 +7,53 @@ from datetime import datetime
 import plotly.express as px
 from sqlalchemy import text
 
-@st.cache_resource
+@st.cache_resource(show_spinner="Connecting to the database...")
+def init_db(user, password):
+    db = LabDatabase(user=user, password=password)
+
+    with db.engine.connect() as conn:
+        pass
+    return db
+
 def get_database_connection():
-    # Sostituisci con la tua logica di inizializzazione
-    return LabDatabase()
+    st.sidebar.title("Database Access")
+    db_user = st.sidebar.text_input("Username Database")
+    db_password = st.sidebar.text_input("Password Database", type="password")
+
+    if db_user and db_password:
+        try:
+            db = init_db(db_user, db_password)
+            st.sidebar.success("Connection established!")
+            return db
+        
+        except Exception as e:
+            st.sidebar.error("Impossible to establish a connection: check your credentials or the database's status.")
+            return None
+    else:
+        st.warning("Please provide your credentials.")
+        return None
 
 db = get_database_connection()
+
+if db:
+    st.write(f"Welcome to database **{db.db_name}**!")
 
 # Cached memory
 @st.cache_data
 def get_individuals_status(_db_engine):
     # L'ordinamento lo facciamo qui!
-    query = "SELECT * FROM lab_data.individuals_status ORDER BY lab_id"
+    query = f"SELECT * FROM {db.schema}.individuals_status ORDER BY lab_id"
     return pd.read_sql(query, _db_engine)
 
 @st.cache_data
 def get_map_coordinates(_db_engine):
     """Scarica le coordinate e le salva in memoria."""
-    query = "SELECT lab_id, coord_ns, coord_we FROM lab_data.individuals"
+    query = f"SELECT lab_id, coord_ns, coord_we FROM {db.schema}.individuals"
     return pd.read_sql(query, _db_engine).dropna()
 
 @st.cache_data
 def get_any_table(_db_engine, table_name):
-    query = f"SELECT * FROM lab_data.{table_name}"
+    query = f"SELECT * FROM {db.schema}.{table_name}"
     return pd.read_sql(query, _db_engine)
 
 @st.cache_data
@@ -39,7 +63,7 @@ def get_backup_files(path, extension):
     return sorted(files, key=os.path.getctime, reverse=True)
 
 # Page title
-st.set_page_config(page_title = "Lab Database Portal", layout = "wide", page_icon = "static/transparent_LPCG_logo.png")
+st.set_page_config(page_title = "Kampos: Lab Database Portal", layout = "wide", page_icon = "static/transparent_LPCG_logo.png")
 st.logo("static/LPiGK_transparent.png", size = "large", icon_image = "static/transparent_LPCG_logo.png")
 
 col1, col2 = st.columns([1, 3])
@@ -47,7 +71,7 @@ with col1:
     st.image("static/LPiGK_transparent.png", width = 800)
 with col2:
     st.markdown("#")
-    st.title("Paleogenetics Lab Database Management System")
+    st.title("Kampos: Paleogenetics Lab Database Management System")
     st.text("v0.1, by Flavia Leotta (2026)")
 st.subheader("", divider = 'orange')
 # st.sidebar.header("Sections", divider = 'gray')
@@ -196,7 +220,7 @@ def edit_entries():
         # 1. CONTROLLO CACHE INTERNA: Carichiamo dal DB solo se la tabella è cambiata
         if "last_selection" not in st.session_state or st.session_state.last_selection != selection:
             with st.spinner(f"Loading {selection}..."):
-                st.session_state.df_to_edit = pd.read_sql(f"SELECT * FROM lab_data.{selection}", db.engine)
+                st.session_state.df_to_edit = pd.read_sql(f"SELECT * FROM {db.schema}.{selection}", db.engine)
                 st.session_state.last_selection = selection
 
         # 2. L'EDITOR usa i dati in memoria (super veloce)
@@ -222,7 +246,7 @@ def edit_entries():
 
 def backup():
     st.subheader("💾 Backup Management")
-    st.text("The backup files are automatically saved every day at 00:00 (UTC+02:00) on anthill v3.0 server.")
+    st.text("The backup files are automatically saved at the first edit of the day.")
 
     col1, col2 = st.columns(2)
 
@@ -287,7 +311,7 @@ def sample_view():
     
     # 1. Ricerca del Lab ID
     # Suggerimento: potresti caricare la lista di tutti i lab_id per un autocomplete
-    all_ids = db.get_column_values("individuals", columns = "lab_id")
+    all_ids = db.get_column_values(table="individuals", columns="lab_id")
     target_id = st.selectbox("Search for a Lab ID:", [""] + all_ids, placeholder = "Start typing a lab_id...", filter_mode = "prefix")
 
     if target_id:
@@ -361,7 +385,7 @@ def project_view():
     st.title("📁 Project Management Overview")
     
     # 1. Recupero lista progetti
-    project_list = db.get_column_values("individuals", columns="project_id")
+    project_list = db.get_column_values(table="individuals", columns="project_id")
     selected_project = st.selectbox("Select Project:", [""] + project_list)
     
     if selected_project:
@@ -382,11 +406,11 @@ def project_view():
         
         # 3. Recupero dati con sintassi corretta per SQLAlchemy 2.0
         # Usiamo text() e conn.execute per essere sicuri che :pid venga letto
-        query = text("SELECT * FROM lab_data.individuals WHERE project_id = :pid")
-        mat_query = text("""
+        query = text(f"SELECT * FROM {db.schema}.individuals WHERE project_id = :pid")
+        mat_query = text(f"""
             SELECT ps.material_description 
-            FROM lab_data.processed_samples ps
-            JOIN lab_data.individuals i ON ps.lab_id = i.lab_id
+            FROM {db.schema}.processed_samples ps
+            JOIN {db.schema}.individuals i ON ps.lab_id = i.lab_id
             WHERE i.project_id = :pid
         """)
 

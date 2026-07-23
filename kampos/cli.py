@@ -1,10 +1,10 @@
 import argparse
 import sys
-from lab_database.commands import web_interface, parse_folder, eager_helper
+from kampos.commands import web_interface, parse_folder, eager_helper
 
 def main():
     parser = argparse.ArgumentParser(
-        prog = "mytool", 
+        prog = "kampos", 
         description = "Paleogenetics and Conservation Genetics Lab Management Tool"
     )
     

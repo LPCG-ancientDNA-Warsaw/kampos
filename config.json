@@ -1,7 +1,81 @@
 {
   "database": {
+    "db_name": "lpcgdb01",
+    
+    "host": "localhost",
+    
+    "port": "5432",
+    
     "schema": "lab_data",
-    "hierarchies": {
+    
+    "mapping": {
+      "individual_id" : {
+        "column_name" : "",
+        "base_table" : ""
+      },
+      "material_id" : {
+        "column_name" : "",
+        "base_table" : ""
+      },
+      "material_description" : {
+        "column_name" : "",
+        "base_table" : ""
+      },
+      "prep_date" : {
+        "column_name" : "",
+        "base_table" : ""
+      },
+      "prep_operator" : {
+        "column_name" : "",
+        "base_table" : ""
+      },
+      "extract_date" : {
+        "column_name" : "",
+        "base_table" : ""
+      },
+      "extract_operator" : {
+        "column_name" : "",
+        "base_table" : ""
+      },
+      "extract_method" : {
+        "column_name" : "",
+        "base_table" : ""
+      },
+      "library_id" : {
+        "column_name" : "",
+        "base_table" : ""
+      },
+      "library_type" : {
+        "column_name" : "",
+        "base_table" : ""
+      },
+      "library_operator" : {
+        "column_name" : "",
+        "base_table" : ""
+      },
+      "raw_reads" : {
+        "column_name" : "",
+        "base_table" : ""
+      },
+      "endo_dna" : {
+        "column_name" : "",
+        "base_table" : ""
+      },
+      "tot_reads_map" : {
+        "column_name" : "",
+        "base_table" : ""
+      },
+      "coord_ns": {
+        "column_name" : "",
+        "base_table" : ""
+      },
+      "coord_we": {
+        "column_name" : "",
+        "base_table" : ""
+      }
+    },
+
+    "table_hierarchies": {
       "individuals": {
         "parent": "sampling_sites",
         "join_on": "site_name"
@@ -11,6 +85,7 @@
         "join_on": "sequencing_id"
       }
     },
+
     "default_values": {
       "country": "Poland",
       "extract_method": "Rohland et al. 2018",
@@ -21,9 +96,11 @@
       "shotgun_enriched": "No",
       "merged": "FALSE"
     }
+
   },
+
   "users": {
-    "flavia": {
+    "fleotta": {
       "regex": "^([A-Z]{2}\\d{3})([A-Z]\\d+)([A-Z]\\d+)([a-z]+)_(.*)_(.*)$",
       "groups": ["lab_id", "material_ext", "lib_seq_type", "udg", "enrichment", "seq_run_id"]
     },
