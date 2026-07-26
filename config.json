@@ -72,6 +72,10 @@
       "coord_we": {
         "column_name" : "",
         "base_table" : ""
+      },
+      "project_id": {
+        "column_name" : "",
+        "base_table" : ""
       }
     },
 

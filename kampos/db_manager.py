@@ -119,20 +119,23 @@ class LabDatabase:
 
                 new_path = path + [(next, left_cols, right_cols)]
 
+                # CASE 2: If the next table is the target, we return the path we have built so far
                 if next == target:
                     return new_path
 
                 queue.append((next, new_path))
                 visited.add(next)
 
+        # CASE 3: If we finish the search and we haven't found the target, we return None
         return None
 
-    def _build_sample_details_query(self, lab_id):
+    def _build_sample_details_query(self):
         mapping = self.config["database"]["mapping"]
 
         # We use individual_id as the base column for the query (we use .get to avoid crashing)
         base_entry = mapping.get("individual_id", {})
 
+        # The base table will be the one where to start the JOIN chain
         base_table = base_entry.get("base_table")
         base_key_col = base_entry.get("column_name")
 
@@ -141,15 +144,17 @@ class LabDatabase:
 
         graph = self._build_join_graph()
 
+        # Here we initialize the SELECT and JOIN parts of the SQL query
         select_parts = []
         join_parts = []
+
+        # Here we create a set of JOINs to monitor because we don't want to duplicate them
         seen_joins = set()
 
-        # base column
+        # The value 'base' here will be defined at the end of the query
         select_parts.append(f"base.{base_key_col} AS individual_id")
 
         requested_fields = [
-            "individual_id",
             "material_id",
             "prep_date",
             "extract_date",
@@ -165,16 +170,120 @@ class LabDatabase:
                 target_table = info.get("base_table")
                 target_column = info.get("column_name")
 
+                # CASE 1: If the target table or column is not defined, we skip this field
                 if not target_table or not target_column:
                     continue
 
-                # if the field is in the base table, select it directly
+                # CASE 2: If the target table is the same as the base table, we can directly select the column without any JOIN
                 if target_table == base_table:
                     select_parts.append(f"base.{target_column} AS {concept}")
                     continue
 
-                # find the path from base table to target table
+                # CASE 3: If the target table is different from the base table, we need to find a JOIN path 
                 path = self._find_join_path(graph, base_table, target_table)
+
+                if path is None:
+                    raise ValueError(f"No join path found between {base_table} and {target_table}")
+
+                # the current alias is what we call the base table in the query to which we attach all the JOINs.
+                current_alias = "base"
+                # The current table is instead the one we are currently visiting in the JOIN path.
+                current_table = base_table
+
+                for next_table, left_cols, right_cols in path:
+                    if not left_cols or not right_cols:
+                        continue
+
+                    # Here we create a tuple that represents the JOIN between the current table and the next in the graph
+                    # We do this to avoid duplicating JOINs in the SQL query, which would cause errors.
+                    join_key = (current_table, next_table)
+                    if join_key not in seen_joins:
+                        join_conditions = []
+                        for left_col, right_col in zip(left_cols, right_cols):
+                            # This is the condition for the JOIN: which columns are we joining?
+                            join_conditions.append(
+                                f"{current_alias}.{left_col} = {next_table}.{right_col}"
+                            )
+
+                        # And then now that we have the name of the table, and the condition for the JOIN
+                        # we create the JOIN line itself
+                        join_parts.append(
+                            f"LEFT JOIN {self.schema}.{next_table} AS {next_table} "
+                            f"ON {' AND '.join(join_conditions)}"
+                        )
+
+                        # And here we add the JOIN to the set seen before, so we do not create it again >_>
+                        seen_joins.add(join_key)
+
+                    # We update the alias and table to continue the JOIN chain
+                    current_alias = next_table
+                    current_table = next_table
+
+                # So we add the final SELECT part for this concept, which is now reachable through the JOINs we have built
+                select_parts.append(f"{target_table}.{target_column} AS {concept}")
+
+            # The final SQL query is built by joining the SELECT parts and the JOIN parts, and adding a WHERE clause to filter by the individual_id
+            sql = f"""
+                SELECT
+                    {', '.join(select_parts)}
+                FROM {self.schema}.{base_table} AS base
+                {' '.join(join_parts)}
+                WHERE base.{base_key_col} = :individual_id
+            """
+
+        return text(sql)
+
+    def get_sample_details(self, individual_id):
+        query = self._build_sample_details_query()
+        return pd.read_sql(query, self.engine, params={"individual_id": individual_id})
+    
+    def _build_project_details_query(self):
+        mapping = self.config["database"]["mapping"]
+
+        base_entry = mapping.get("individual_id", {})
+        base_table = base_entry.get("base_table")
+        base_key_col = base_entry.get("column_name")
+
+        # Define a filter 
+        project_col = mapping.get("project_id", {}).get("column_name", "project_id")
+
+        if not any([base_table, base_key_col]):
+            raise ValueError("mapping['individual_id'] information is required. Please check config.json.")
+        
+        graph = self._build_join_graph()
+
+        requested_fields = {
+            "individual_id" : ["total_individuals", "COUNT(DISTINCT)"],
+            "material_id" : ["total_samples", "COUNT(DISTINCT)"],
+            "library_id" : ["total_libraries", "COUNT(DISTINCT)"],
+            "endo_dna" : ["avg_endo_dna", "AVG"]
+        }
+
+        # Here we initialize the SELECT and JOIN parts of the SQL query
+        select_parts = []
+        join_parts = []
+        
+        # Here we create a set of JOINs to monitor because we don't want to duplicate them
+        seen_joins = set()
+
+        for concept, info in mapping.items():
+            if concept in requested_fields.keys():
+                target_table = info.get("base_table")
+                target_column = info.get("column_name")
+
+                if not target_table or not target_column:
+                    continue
+
+                if target_table == base_table:
+                    if "DISTINCT" in requested_fields[concept][1]:
+                        select_parts.append(f"COUNT(DISTINCT base.{target_column}) AS {requested_fields[concept][0]}")
+                        continue
+                    elif "AVG" in requested_fields[concept][1]:
+                        select_parts.append(f"AVG(base.{target_column}) AS {requested_fields[concept][0]}")
+                        continue
+
+                path = self._find_join_path(graph, base_table, target_table)
+
                 if path is None:
                     raise ValueError(f"No join path found between {base_table} and {target_table}")
 
@@ -195,52 +304,35 @@ class LabDatabase:
 
                         join_parts.append(
                             f"LEFT JOIN {self.schema}.{next_table} AS {next_table} "
-                            f"ON {' AND '.join(join_conditions)}"
+                            f"ON {' AND '.join(join_conditions)}"  
                         )
+
                         seen_joins.add(join_key)
 
                     current_alias = next_table
                     current_table = next_table
 
-                select_parts.append(f"{target_table}.{target_column} AS {concept}")
+                if "DISTINCT" in requested_fields[concept][1]:
+                    select_parts.append(f"COUNT(DISTINCT {target_table}.{target_column}) AS {requested_fields[concept][0]}")
+                elif "AVG" in requested_fields[concept][1]:
+                    select_parts.append(f"AVG({target_table}.{target_column}) AS {requested_fields[concept][0]}")
 
-            sql = f"""
-                SELECT
-                    {', '.join(select_parts)}
-                FROM {self.schema}.{base_table} AS base
-                {' '.join(join_parts)}
-                WHERE base.{base_key_col} = :id
-            """
-
+        sql = f"""
+            SELECT
+                {', '.join(select_parts)}
+            FROM {self.schema}.{base_table} AS base
+            {' '.join(join_parts)}
+            WHERE base.{project_col} = :project_id
+        """
         return text(sql)
 
+    def get_project_details(self, project_id):
+        query = self._build_project_details_query()
+        return pd.read_sql(query, self.engine, params={"project_id": project_id})
 
-    def get_sample_details(self, individual_id):
-        query = self._build_sample_details_query(individual_id)
-        return pd.read_sql(query, self.engine, params={"individual_id": individual_id})
-    
-    def get_project_stats(self, project_id):
-        query = text("""
-            SELECT 
-                COUNT(DISTINCT i.lab_id) as total_individuals,
-                COUNT(DISTINCT ps.material_id) as total_samples,
-                COUNT(DISTINCT de.lab_id) as total_extractions,
-                COUNT(DISTINCT lib.library_id) as total_libraries,
-                AVG(dm.endo_dna) as avg_endogenous
-            FROM lab_data.individuals i
-            LEFT JOIN lab_data.processed_samples ps ON i.lab_id = ps.lab_id
-            LEFT JOIN lab_data.dna_extractions de ON i.lab_id = de.lab_id
-            LEFT JOIN lab_data.libraries lib ON i.lab_id = lib.lab_id
-            LEFT JOIN lab_data.dna_sequencing ds ON lib.library_id = ds.library_id
-            LEFT JOIN lab_data.dna_mapping dm ON ds.fastq_name = dm.fastq_name
-            WHERE i.project_id = :pid
-        """)
-        return pd.read_sql(query, self.engine, params={"pid": project_id})
-    
     def get_primary_keys(self, table_name, schema=None):
         """
-        Recupera dinamicamente i nomi delle colonne che compongono 
-        la Primary Key di una tabella.
+        Recover the primary keys of a table in the database.
         """
         if schema is None:
             schema = self.schema 
@@ -309,8 +401,8 @@ class LabDatabase:
 
     def safe_update_table(self, table_name, edited_df, schema=None):
         """
-        Aggiorna la tabella nel database mantenendo i vincoli.
-        Usa 'to_sql' con un approccio temporaneo per evitare di rompere le Foreign Keys.
+        Updates table taking into consideration the primary keys of the table. 
+        If a row with the same primary key exists, it will be updated; otherwise, it will be inserted.
         """
         if schema is None:
             schema = self.schema 
@@ -325,7 +417,7 @@ class LabDatabase:
 
         try:
             with self.engine.begin() as conn:
-                # 1. Carichiamo i dati modificati in una tabella temporanea 'staging'
+                # Temporary staging table name
                 staging_name = f"temp_staging_{table_name}"
                 edited_df.to_sql(staging_name, conn, schema=schema, 
                                 if_exists='replace', index = False)
@@ -337,21 +429,28 @@ class LabDatabase:
                 
                 col_names = ", ".join(edited_df.columns)
                 pk_constraint = ", ".join(pk_cols)
-                
+
+                inspector = inspect(self.engine)
+                database_cols = inspector.get_columns(table_name, schema=schema)
                 # Creiamo una lista di colonne per il SELECT facendo il cast automatico
                 # Se la colonna contiene "date", forziamo il tipo DATE
                 select_parts = []
 
                 for col in edited_df.columns:
-                    c_low = col.lower()
-                    # Se è una data vera (es. collection_date, extraction_date)
-                    if "date" in c_low and "ce_" not in c_low and "epoch" not in c_low:
+                    col_info = next((database_col for database_col in database_cols if database_col['name'].lower() == col.lower()), None)
+                    col_type = str(col_info['type']).lower() if col_info else None
+
+                    if "date" in col_type or "timestamp" in col_type:
                         select_parts.append(f"NULLIF({col}::TEXT, '')::DATE AS {col}")
-                    # Se è un anno/numero (es. date_ce_start, period_order)
-                    elif "ce_" in c_low or "order" in c_low:
+                    elif "integer" in col_type or "int" in col_type:
                         select_parts.append(f"NULLIF({col}::TEXT, '')::INTEGER AS {col}")
+                    elif "numeric" in col_type or "float" in col_type or "double" in col_type:
+                        select_parts.append(f"NULLIF({col}::TEXT, '')::NUMERIC AS {col}")
+                    elif "bool" in col_type or "boolean" in col_type:
+                        select_parts.append(f"NULLIF({col}::TEXT, '')::BOOLEAN AS {col}")
                     else:
                         select_parts.append(col)
+
                 select_clause = ", ".join(select_parts)
 
                 if not columns_to_update:
@@ -364,14 +463,20 @@ class LabDatabase:
                     # 1. Costruiamo la lista delle assegnazioni
                     set_parts = []
                     for col in columns_to_update:
-                        c_low = col.lower()
-                        # CAST per DATE vere
-                        if "date" in c_low and "ce_" not in c_low and "epoch" not in c_low:
+                        col_info = next(
+                            (database_col for database_col in database_cols if database_col["name"].lower() == col.lower()),
+                            None
+                        )
+                        col_type = str(col_info["type"]).lower() if col_info else None
+
+                        if "date" in col_type or "timestamp" in col_type:
                             set_parts.append(f"{col} = EXCLUDED.{col}::TEXT::DATE")
-                        # CAST per ANNI/INTERI
-                        elif "ce_" in c_low or "order" in c_low:
+                        elif "integer" in col_type or "int" in col_type:
                             set_parts.append(f"{col} = EXCLUDED.{col}::TEXT::INTEGER")
-                        # TESTO SEMPLICE (come Bronze Age)
+                        elif "numeric" in col_type or "float" in col_type or "double" in col_type:
+                            set_parts.append(f"{col} = EXCLUDED.{col}::TEXT::NUMERIC")
+                        elif "bool" in col_type or "boolean" in col_type:
+                            set_parts.append(f"{col} = EXCLUDED.{col}::TEXT::BOOLEAN")
                         else:
                             set_parts.append(f"{col} = EXCLUDED.{col}")
                     
@@ -595,6 +700,7 @@ class LabDatabase:
 
 
 if __name__ == "__main__":
+
     try:
         db = LabDatabase()
         print(f"Connection to the {db.host} for user {db.user} created successfully.")
