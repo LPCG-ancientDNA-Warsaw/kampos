@@ -155,6 +155,7 @@ class LabDatabase:
         select_parts.append(f"base.{base_key_col} AS individual_id")
 
         requested_fields = [
+            "site_name",
             "material_id",
             "prep_date",
             "extract_date",
@@ -235,6 +236,103 @@ class LabDatabase:
 
     def get_sample_details(self, individual_id):
         query = self._build_sample_details_query()
+        return pd.read_sql(query, self.engine, params={"individual_id": individual_id})
+
+
+    def _build_long_sample_details_query(self):
+        mapping = self.config["database"]["mapping"]
+
+        # We use individual_id as the base column for the query (we use .get to avoid crashing)
+        base_entry = mapping.get("individual_id", {})
+
+        # The base table will be the one where to start the JOIN chain
+        base_table = base_entry.get("base_table")
+        base_key_col = base_entry.get("column_name")
+
+        if not any([base_table, base_key_col]):
+            raise ValueError("mapping['individual_id'] information is required. Please check config.json.")
+
+        graph = self._build_join_graph()
+
+        # Here we initialize the SELECT and JOIN parts of the SQL query
+        select_parts = []
+        join_parts = []
+
+        # Here we create a set of JOINs to monitor because we don't want to duplicate them
+        seen_joins = set()
+
+        
+
+        # add all mapped fields
+        for concept, info in mapping.items():
+            target_table = info.get("base_table")
+            target_column = info.get("column_name")
+
+            # CASE 1: If the target table or column is not defined, we skip this field
+            if not target_table or not target_column:
+                continue
+
+            # CASE 2: If the target table is the same as the base table, we can directly select the column without any JOIN
+            if target_table == base_table:
+                select_parts.append(f"base.{target_column} AS {concept}")
+                continue
+
+            # CASE 3: If the target table is different from the base table, we need to find a JOIN path 
+            path = self._find_join_path(graph, base_table, target_table)
+
+            if path is None:
+                raise ValueError(f"No join path found between {base_table} and {target_table}")
+
+            # the current alias is what we call the base table in the query to which we attach all the JOINs.
+            current_alias = "base"
+            # The current table is instead the one we are currently visiting in the JOIN path.
+            current_table = base_table
+
+            for next_table, left_cols, right_cols in path:
+                if not left_cols or not right_cols:
+                    continue
+
+                # Here we create a tuple that represents the JOIN between the current table and the next in the graph
+                # We do this to avoid duplicating JOINs in the SQL query, which would cause errors.
+                join_key = (current_table, next_table)
+                if join_key not in seen_joins:
+                    join_conditions = []
+                    for left_col, right_col in zip(left_cols, right_cols):
+                        # This is the condition for the JOIN: which columns are we joining?
+                        join_conditions.append(
+                            f"{current_alias}.{left_col} = {next_table}.{right_col}"
+                        )
+
+                    # And then now that we have the name of the table, and the condition for the JOIN
+                    # we create the JOIN line itself
+                    join_parts.append(
+                        f"LEFT JOIN {self.schema}.{next_table} AS {next_table} "
+                        f"ON {' AND '.join(join_conditions)}"
+                    )
+
+                    # And here we add the JOIN to the set seen before, so we do not create it again >_>
+                    seen_joins.add(join_key)
+
+                # We update the alias and table to continue the JOIN chain
+                current_alias = next_table
+                current_table = next_table
+
+            # So we add the final SELECT part for this concept, which is now reachable through the JOINs we have built
+            select_parts.append(f"{target_table}.{target_column} AS {concept}")
+
+        # The final SQL query is built by joining the SELECT parts and the JOIN parts, and adding a WHERE clause to filter by the individual_id
+        sql = f"""
+            SELECT
+                {', '.join(select_parts)}
+            FROM {self.schema}.{base_table} AS base
+            {' '.join(join_parts)}
+            WHERE base.{base_key_col} = :individual_id
+        """
+
+        return text(sql)
+
+    def get_long_sample_details(self, individual_id):
+        query = self._build_long_sample_details_query()
         return pd.read_sql(query, self.engine, params={"individual_id": individual_id})
     
     def _build_project_details_query(self):
@@ -522,16 +620,7 @@ class LabDatabase:
         failed_sheets = []
 
         # Default Values
-        default_values = {
-            'country': 'Poland',
-            'extract_method': 'Rohland et al. 2018',
-            'lysis_method': 'Rohland et al. 2018', 
-            'library_type': 'Single',
-            'index_method': 'Cx, XX ul',
-            'qPCR_method': 'AA Biotech',
-            'shotgun_enriched': 'No',
-            'merged': 'FALSE'
-            }
+        default_values = self.config["database"]["default_values"]
 
         # Opens connection to the database
         with self.engine.connect() as conn:
@@ -560,8 +649,8 @@ class LabDatabase:
                         # If yes, tries to append the new data
                         try:
                             
-                            if sheet == "individuals" or sheet == "indexing":
-                                self.check_parent_from_child(parent_name = sheet, child_dataframe=data, conn=conn) 
+                            if sheet in self.config["database"]["table_hierarchies"].keys():
+                                self.check_parent_from_child(parent_name = self.config["database"]["table_hierarchies"][sheet]["parent"], child_dataframe=data, conn=conn)
 
                             print(f"Attempting to insert {len(data)} rows into {sheet}...")
 
@@ -610,9 +699,12 @@ class LabDatabase:
 
         while len(files) > max_backups:
             old_file = files.pop(0)
-            os.remove(old_file)
-            print(f"Old backup removed: {old_file}")
-        
+            try:
+                os.remove(old_file)
+                print(f"Old backup removed: {old_file}")
+            except Exception as e:
+                print(f"Error while removing old backup {old_file}: {e}")
+
         pass
 
     def get_tables_names(self, schema = None):
@@ -635,8 +727,8 @@ class LabDatabase:
         return tables
 
 
-    def run_backup(self):
-        """Executes the backup of the .sql, .tsv and .xlsx files.
+    def run_backup(self, schema = None):
+        """Executes the backup of the .tsv and .xlsx files.
         
         Input:
         - None
@@ -644,38 +736,50 @@ class LabDatabase:
         Ouput:
         - Pass
         """
-        
+        if schema == None:
+            schema = self.schema
 
-        # Obtain current timestamp
+        # 1. Obtain current timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M")
         os.makedirs("./backups", exist_ok = True)
         
-        ### 1. Backup SQL
-        sql_file = f"./backups/db_full_backup_{timestamp}.sql"
-
-        # Find postgre path
-        pg_dump_path = shutil.which("pg_dump")
-
-        # If it finds it...
-        if pg_dump_path:
-            env = os.environ.copy()
-            env["PGPASSWORD"] = self.password
-
-            try:
-                subprocess.run(
-                    ["pg_dump", "-h", self.host, "-U", self.user, "-d", self.db_name, "-f", sql_file],
-                    env = env, check = True)
-                print(f"Created backup SQL: {sql_file}")
-
-            except Exception as e:
-                print(f"Error during the creation of the backup: {e}")
-        else:
-            print(f"Error: 'pg_dump' not found on the server. Skipping the .sql backup. (The database will be saved on an Excel file you can upload)")
-
         # 2. Export View TSV
         tsv_file = f"./backups/view_report_{timestamp}.tsv"
-        df = pd.read_sql("SELECT * FROM lab_data.individuals_status", self.engine)
-        df.to_csv(tsv_file, sep = '\t', index = False)
+        all_individual_ids = self.get_column_values(
+            table=self.config["database"]["mapping"]["individual_id"]["base_table"],
+            columns=self.config["database"]["mapping"]["individual_id"]["column_name"],
+        )
+        requested_fields = [
+            "individual_id",
+            "site_name",
+            "material_id",
+            "prep_date",
+            "extract_date",
+            "library_id",
+            "raw_reads",
+            "endo_dna",
+            "tot_reads_map"
+        ]
+
+        details_frames = []
+        for individual_id in all_individual_ids:
+            df = self.get_sample_details(individual_id)
+            if df.empty:
+                continue
+
+            if "individual_id" not in df.columns:
+                df = df.copy()
+                df["individual_id"] = individual_id
+
+            df = df.reindex(columns=requested_fields, fill_value=pd.NA)
+            details_frames.append(df)
+
+        if details_frames:
+            combined_df = pd.concat(details_frames, ignore_index=True)
+            combined_df.to_csv(tsv_file, sep='\t', index=False)
+        else:
+            pd.DataFrame(columns=requested_fields).to_csv(tsv_file, sep='\t', index=False)
+
         print(f"Created report tsv: {tsv_file}")
 
         # 3. Export Excel
@@ -685,14 +789,13 @@ class LabDatabase:
         with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
             for table_name in tables:
                 # Leggiamo la tabella dal DB
-                df = pd.read_sql(f"SELECT * FROM lab_data.{table_name}", self.engine)
+                df = pd.read_sql(f"SELECT * FROM {schema}.{table_name}", self.engine)
                 # La scriviamo in un foglio dedicato
                 df.to_excel(writer, sheet_name = table_name, index = False)
         
         print(f"Created backup Excel: {excel_file}")
 
         # 3. Rotation (only keeps the 3 most recent backups)
-        self._rotate_backups(".sql")
         self._rotate_backups(".tsv")
         self._rotate_backups(".xlsx")
 
@@ -700,9 +803,10 @@ class LabDatabase:
 
 
 if __name__ == "__main__":
-
     try:
-        db = LabDatabase()
+        user = input("User: ")
+        password = input("Password: ")
+        db = LabDatabase(user=user, password=password)
         print(f"Connection to the {db.host} for user {db.user} created successfully.")
     except Exception as ex:
         print(f"Connection could not be created due to the following error:\n", ex)

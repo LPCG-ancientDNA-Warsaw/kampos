@@ -1,81 +1,102 @@
 {
   "database": {
     "db_name": "lpcgdb01",
-    
     "host": "localhost",
-    
     "port": "5432",
-    
     "schema": "lab_data",
     
     "mapping": {
       "individual_id" : {
-        "column_name" : "",
-        "base_table" : ""
+        "column_name" : "lab_id",
+        "base_table" : "individuals"
+      },
+      "site_name" : {
+        "column_name" : "site_name",
+        "base_table" : "individuals"
+      },
+      "epoch": {
+        "column_name" : "epoch",
+        "base_table" : "individuals"
+      },
+      "time_period": {
+        "column_name" : "time_period",
+        "base_table" : "individuals"
+      },
+      "grave_no": {
+        "column_name" : "grave_no",
+        "base_table" : "individuals"
+      },
+      "contact_person": {
+        "column_name" : "contact_person",
+        "base_table" : "individuals"
       },
       "material_id" : {
-        "column_name" : "",
-        "base_table" : ""
+        "column_name" : "material_id",
+        "base_table" : "processed_samples"
       },
       "material_description" : {
-        "column_name" : "",
-        "base_table" : ""
+        "column_name" : "material_description",
+        "base_table" : "processed_samples"
       },
       "prep_date" : {
-        "column_name" : "",
-        "base_table" : ""
+        "column_name" : "prep_date",
+        "base_table" : "processed_samples"
       },
       "prep_operator" : {
-        "column_name" : "",
-        "base_table" : ""
+        "column_name" : "prep_operator",
+        "base_table" : "processed_samples"
       },
       "extract_date" : {
-        "column_name" : "",
-        "base_table" : ""
+        "column_name" : "extract_date",
+        "base_table" : "dna_extractions"
       },
       "extract_operator" : {
-        "column_name" : "",
-        "base_table" : ""
+        "column_name" : "extract_operator",
+        "base_table" : "dna_extractions"
       },
       "extract_method" : {
-        "column_name" : "",
-        "base_table" : ""
+        "column_name" : "extract_method",
+        "base_table" : "dna_extractions"
       },
       "library_id" : {
-        "column_name" : "",
-        "base_table" : ""
+        "column_name" : "library_id",
+        "base_table" : "libraries"
       },
       "library_type" : {
-        "column_name" : "",
-        "base_table" : ""
+        "column_name" : "library_type",
+        "base_table" : "libraries"
       },
       "library_operator" : {
-        "column_name" : "",
-        "base_table" : ""
+        "column_name" : "library_operator",
+        "base_table" : "libraries"
       },
       "raw_reads" : {
-        "column_name" : "",
-        "base_table" : ""
+        "column_name" : "raw_reads",
+        "base_table" : "dna_sequencing"
       },
       "endo_dna" : {
-        "column_name" : "",
-        "base_table" : ""
+        "column_name" : "endo_dna",
+        "base_table" : "dna_mapping"
       },
       "tot_reads_map" : {
-        "column_name" : "",
-        "base_table" : ""
+        "column_name" : "tot_reads_map",
+        "base_table" : "dna_mapping"
       },
       "coord_ns": {
-        "column_name" : "",
-        "base_table" : ""
+        "column_name" : "coord_ns",
+        "base_table" : "individuals"
       },
       "coord_we": {
-        "column_name" : "",
-        "base_table" : ""
+        "column_name" : "coord_we",
+        "base_table" : "individuals"
       },
       "project_id": {
-        "column_name" : "",
-        "base_table" : ""
+        "column_name" : "project_id",
+        "base_table" : "individuals"
+      },
+      "fastq_name": {
+        "column_name" : "fastq_name",
+        "base_table" : "dna_sequencing"
       }
     },
 
@@ -100,7 +121,6 @@
       "shotgun_enriched": "No",
       "merged": "FALSE"
     }
-
   },
 
   "users": {

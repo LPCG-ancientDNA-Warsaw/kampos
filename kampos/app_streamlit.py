@@ -10,9 +10,9 @@ from sqlalchemy import text
 @st.cache_resource(show_spinner="Connecting to the database...")
 def init_db(user, password):
     db = LabDatabase(user=user, password=password)
-
     with db.engine.connect() as conn:
         pass
+    
     return db
 
 def get_database_connection():
@@ -41,14 +41,72 @@ if db:
 # Cached memory
 @st.cache_data
 def get_individuals_status(_db_engine):
-    # L'ordinamento lo facciamo qui!
-    query = f"SELECT * FROM {db.schema}.individuals_status ORDER BY lab_id"
-    return pd.read_sql(query, _db_engine)
+    all_individual_ids = db.get_column_values(
+        table=db.config["database"]["mapping"]["individual_id"]["base_table"],
+        columns=db.config["database"]["mapping"]["individual_id"]["column_name"],)
+
+    requested_fields = [
+        "individual_id",
+        "material_id",
+        "prep_date",
+        "extract_date",
+        "library_id",
+        "raw_reads",
+        "endo_dna",
+        "tot_reads_map",
+        ]
+    
+    details_frames = []
+    for individual_id in all_individual_ids:
+        df = db.get_sample_details(individual_id)
+        if df.empty:
+            continue
+    
+        if "individual_id" not in df.columns:
+            df = df.copy()
+            df["individual_id"] = individual_id
+    
+        df = df.reindex(columns=requested_fields, fill_value=pd.NA)
+        details_frames.append(df)
+    
+    if details_frames:
+        combined_df = pd.concat(details_frames, ignore_index=True)
+
+    return combined_df
 
 @st.cache_data
 def get_map_coordinates(_db_engine):
     """Scarica le coordinate e le salva in memoria."""
-    query = f"SELECT lab_id, coord_ns, coord_we FROM {db.schema}.individuals"
+    individual_id_column_name = db.config["database"]["mapping"]["individual_id"]["column_name"]
+    individual_id_table = db.config["database"]["mapping"]["individual_id"]["base_table"]
+    coord_ns_info = db.config["database"]["mapping"]["coord_ns"]
+    coord_we_info =  db.config["database"]["mapping"]["coord_we"]
+    coords_table = coord_ns_info["base_table"]
+
+    if not individual_id_column_name or not individual_id_table:
+        raise ValueError("The mapping for individual_id is incomplete in config.json")
+
+    if not coord_ns_info.get("column_name") or not coord_we_info.get("column_name"):
+        raise ValueError("The mapping for coord_ns/coord_we is incomplete in config.json")
+
+
+    if str(individual_id_table).lower() == str(coords_table).lower():
+        query = f"""
+        SELECT {individual_id_column_name} AS individual_id,
+               {coord_ns_info["column_name"]} AS coord_ns, 
+               {coord_we_info["column_name"]} AS coord_we
+        FROM {db.schema}.{individual_id_table}
+        """
+    else:
+        query = f"""
+        SELECT i.{individual_id_column_name} AS individual_id, 
+               c.{coord_ns_info["column_name"]} AS coord_ns,
+               c.{coord_we_info["column_name"]} AS coord_we
+        FROM {db.schema}.{individual_id_table} AS i
+        LEFT JOIN {db.schema}.{coords_table} AS c
+        ON i.{individual_id_column_name} = c.{individual_id_column_name}
+        """
+    
     return pd.read_sql(query, _db_engine).dropna()
 
 @st.cache_data
@@ -71,7 +129,7 @@ with col1:
     st.image("static/LPiGK_transparent.png", width = 800)
 with col2:
     st.markdown("#")
-    st.title("Kampos: Paleogenetics Lab Database Management System")
+    st.title("Kampos: Keep All Metadata Properly and Orderly Stored")
     st.text("v0.1, by Flavia Leotta (2026)")
 st.subheader("", divider = 'orange')
 # st.sidebar.header("Sections", divider = 'gray')
@@ -81,13 +139,15 @@ st.subheader("", divider = 'orange')
 def home_page():
 #if choice == "Home page":
     st.subheader("Home page")
+    #### General useful information
     
     try:
+
         df = get_individuals_status(db.engine)
         coords_all = get_map_coordinates(db.engine)
 
         # --- 1. FUNZIONE DI RICERCA MULTI-ID ---
-        search_input = st.text_input("🔍 Search by Lab ID (separate multiple IDs with commas):", "").strip().upper()
+        search_input = st.text_input("🔍 Search by Individual ID (separate multiple IDs with commas):", "").strip().upper()
 
         if search_input:
             # Dividiamo la stringa per virgola e puliamo gli spazi per ogni ID
@@ -98,7 +158,7 @@ def home_page():
             # In industria si usa la regex (Regular Expression) per fare ricerche multiple veloci
             import re
             regex_search = "|".join(map(re.escape, search_list)) # Crea una stringa tipo "PL001|PL005"
-            df_filtered = df[df['lab_id'].str.contains(regex_search, na=False, regex=True)]
+            df_filtered = df[df["individual_id"].str.contains(regex_search, na=False, regex=True)]
             st.caption(f"Found {len(df_filtered)} samples matching your search criteria.")
         else:
             df_filtered = df
@@ -139,7 +199,7 @@ def home_page():
 
         # --- 3. VISUALIZZAZIONE ---
         col_left, col_right = st.columns([1, 3])
-
+        
         with col_right:
             if df_page.empty:
                 st.warning("No samples found matching your search.")
@@ -153,16 +213,17 @@ def home_page():
                 )
                 
                 selected_indices = event.selection.rows
-                selected_ids = [df_page.iloc[i]['lab_id'] for i in selected_indices] if selected_indices else []
+                selected_ids = [df_page.iloc[i]["individual_id"] for i in selected_indices] if selected_indices else []
 
         with col_left:
             with st.expander("📍 Map View", expanded=True):
                 # Se l'utente ha cercato qualcosa, la mappa mostra solo i risultati della ricerca
                 # Se ha anche selezionato righe, mostra solo le selezionate
-                map_source = coords_all[coords_all['lab_id'].isin(df_filtered['lab_id'])]
+                
+                map_source = coords_all[coords_all["individual_id"].isin(df_filtered["individual_id"])]
                 
                 if selected_ids:
-                    map_data = map_source[map_source['lab_id'].isin(selected_ids)]
+                    map_data = map_source[map_source["individual_id"].isin(selected_ids)]
                 else:
                     map_data = map_source
                 
@@ -302,33 +363,43 @@ def backup():
     if st.button("Execute the backup now", type="primary"):
         with st.spinner("Generating backup files..."):
             db.run_backup()
-            st.success("Backup SQL, CSV and XLSX correctly generated!")
+            st.success("Backup CSV and XLSX correctly generated!")
             st.cache_data.clear()
             st.rerun() 
 
 def sample_view():
     st.title("🧬 Sample Detailed View")
-    
+    id_info = db.config["database"]["mapping"]["individual_id"]
     # 1. Ricerca del Lab ID
     # Suggerimento: potresti caricare la lista di tutti i lab_id per un autocomplete
-    all_ids = db.get_column_values(table="individuals", columns="lab_id")
-    target_id = st.selectbox("Search for a Lab ID:", [""] + all_ids, placeholder = "Start typing a lab_id...", filter_mode = "prefix")
+    all_ids = db.get_column_values(table=id_info["base_table"], columns=id_info["column_name"])
+    target_id = st.selectbox("Search for a Lab ID:", [""] + all_ids, placeholder = "Start typing an individual ID...", filter_mode = "prefix")
 
+    
     if target_id:
-        data = db.get_sample_details(target_id)
-        
+        data = db.get_long_sample_details(target_id)
+        print(data)
+
         if data.empty:
             st.warning("No data found for this ID.")
             return
 
         # Prendiamo la prima riga per le info generali
-        info = data.iloc[0]
+        data = data.loc[:, ~data.columns.duplicated()]
+
+        def get_scalar_val(df, col_name, default="N/A"):
+            if col_name in df.columns and not df[col_name].empty:
+                val = df[col_name].dropna().iloc[0] if not df[col_name].dropna().empty else None
+                if val is not None:
+                    return str(val)
+    
+            return default
 
         # Header con info principali
-        col1, col2, col3= st.columns(3)
-        col1.metric("Lab ID", info['lab_id'])
-        col2.metric("Project", info['project_id'])
-        col3.metric("Site", info['site_name'])
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Individual ID", get_scalar_val(data, 'individual_id'))
+        col2.metric("Project", get_scalar_val(data, 'project_id'))
+        col3.metric("Site", get_scalar_val(data, 'site_name'))
 
         st.divider()
 
@@ -338,46 +409,80 @@ def sample_view():
         with tab1:
             st.subheader("Archeological Context")
             c1, c2 = st.columns(2)
-            c1.write(f"**Epoch:** {info.get('epoch', 'Unknown')}")
-            c1.write(f"**Period:** {info.get('time_period', 'Unknown')}")
-            c2.write(f"**Grave No:** {info.get('grave_no', 'N/A')}")
-            c2.write(f"**Contact Person:** {info.get('contact_person', 'N/A')}")
+            c1.write(f"**Epoch:** {get_scalar_val(data, 'epoch', 'Unknown')}")
+            c1.write(f"**Period:** {get_scalar_val(data, 'time_period', 'Unknown')}")
+            c2.write(f"**Grave No:** {get_scalar_val(data, 'grave_no', 'N/A')}")
+            c2.write(f"**Contact Person:** {get_scalar_val(data, 'contact_person', 'N/A')}")
+
+            coord_ns = get_scalar_val(data, 'coord_ns', None)
+            coord_we = get_scalar_val(data, 'coord_we', None)
             
-            if info.get('coord_ns') and info.get('coord_we'):
-                # Piccola mappa se ci sono coordinate
-                map_data = pd.DataFrame({'lat': [info['coord_ns']], 'lon': [info['coord_we']]})
-                st.map(map_data, zoom=4)
+            if coord_ns and coord_we:
+                try:
+                    map_data = pd.DataFrame({'lat': [float(coord_ns)], 'lon': [float(coord_we)]})
+                    st.map(map_data, zoom=4)
+                except ValueError:
+                    st.caption("Coordinates available but not in valid numeric format.")
 
         with tab2:
             st.subheader("Laboratory History")
             # Mostriamo i passaggi chiave
+# --- Section A: Materiali campionati ---
             with st.expander("Sampled Materials (Processed Samples)", expanded=True):
-                # Estraiamo solo le colonne relative ai campioni processati e togliamo i duplicati
-                materials_df = data[['material_id', 'material_description', 'prep_date', 'prep_operator']].drop_duplicates().dropna(subset=['material_id'])
-                
-                if not materials_df.empty:
-                    st.dataframe(materials_df, width='stretch', hide_index=True)
-                else:
-                    st.info("No processed samples found for this individual.")
-            
-            st.write(f"**Extraction Date:** {info.get('extract_date', 'Not yet extracted')}")
-            st.write(f"**Operator:** {info.get('extract_operator', '-')}")
-            st.write(f"**Method:** {info.get('extract_method', '-')}")
-            
-            st.divider()
-            st.write("**Library Information:**")
-            # Se ci sono più librerie per lo stesso campione, qui data avrà più righe
-            st.table(data[['library_id', 'library_type', 'library_operator']].drop_duplicates().dropna())
+                mat_cols = [c for c in ['material_id', 'material_description', 'prep_date', 'prep_operator'] if c in data.columns]
+                if mat_cols:
+                    materials_df = data[mat_cols].drop_duplicates().dropna(how='all')
+                    if not materials_df.empty:
+                        st.dataframe(materials_df, width="stretch", hide_index=True)
+                    else:
+                        st.info("No processed samples found for this individual.")
 
+            # --- Section B: Estrazioni DNA (Supporto a estrazioni multiple) ---
+            st.markdown("#### 🧬 DNA Extractions")
+            extract_cols = [c for c in ['individual_id', 'material_id', 'extract_date', 'extract_operator', 'extract_method'] if c in data.columns]
+            
+            # Se la colonna extract_id esiste, filtriamo per quella, altrimenti usiamo le altre info
+            if extract_cols:
+                extractions_df = data[extract_cols].drop_duplicates().dropna(how='all')
+                if not extractions_df.empty:
+                    st.dataframe(extractions_df, width="stretch", hide_index=True)
+                else:
+                    st.info("No DNA extraction records found.")
+            else:
+                st.info("No extraction columns mapped.")
+
+            st.divider()
+
+            # --- Section C: Librerie (Supporto a librerie multiple) ---
+            st.markdown("#### 🧪 Library Preparation")
+            lib_cols = [c for c in ['library_id', 'library_type', 'library_operator', 'library_date'] if c in data.columns]
+            if lib_cols:
+                libraries_df = data[lib_cols].drop_duplicates().dropna(how='all')
+                if not libraries_df.empty:
+                    st.dataframe(libraries_df, width="stretch", hide_index=True)
+                else:
+                    st.info("No library preparation records found.")
+
+        # TAB 3: RISULTATI DI SEQUENZIAMENTO E BIOINFORMATICA
         with tab3:
             st.subheader("Bioinformatics Overview")
-            if pd.notnull(info.get('fastq_name')):
+            
+            seq_cols = [c for c in ['fastq_name', 'raw_reads', 'tot_reads_map', 'endo_dna'] if c in data.columns]
+            seq_data = data[seq_cols].drop_duplicates().dropna(subset=['fastq_name']) if 'fastq_name' in data.columns else pd.DataFrame()
+
+            if not seq_data.empty:
+                # Calcoliamo i totali/riassunti su tutti i runs di sequenziamento
+                tot_raw = seq_data['raw_reads'].sum() if 'raw_reads' in seq_data.columns else 0
+                tot_mapped = seq_data['tot_reads_map'].sum() if 'tot_reads_map' in seq_data.columns else 0
+                avg_endo = seq_data['endo_dna'].mean() if 'endo_dna' in seq_data.columns else 0
+
                 c1, c2, c3 = st.columns(3)
-                c1.metric("Raw Reads", f"{info.get('raw_reads', 0):,}")
-                c2.metric("Mapped Reads", f"{info.get('tot_reads_map', 0):,}")
-                c3.metric("Endogenous DNA", f"{info.get('endo_dna', 0)}%")
-                
-                st.write(f"**Fastq Name:** `{info['fastq_name']}`")
+                c1.metric("Total Raw Reads", f"{int(tot_raw):,}" if pd.notnull(tot_raw) else "0")
+                c2.metric("Total Mapped Reads", f"{int(tot_mapped):,}" if pd.notnull(tot_mapped) else "0")
+                c3.metric("Avg Endogenous DNA", f"{avg_endo:.2f}%" if pd.notnull(avg_endo) else "N/A")
+
+                st.markdown("#### FASTQ Files & Details")
+                st.dataframe(seq_data, width="stretch", hide_index=True)
             else:
                 st.info("Sequencing data not yet available for this sample.")
 
@@ -385,12 +490,13 @@ def project_view():
     st.title("📁 Project Management Overview")
     
     # 1. Recupero lista progetti
-    project_list = db.get_column_values(table="individuals", columns="project_id")
+    project_info = db.config["database"]["mapping"]["project_id"]
+    project_list = db.get_column_values(table=project_info["base_table"], columns=project_info["column_name"])
     selected_project = st.selectbox("Select Project:", [""] + project_list)
     
     if selected_project:
         # 2. Statistiche KPI
-        stats_df = db.get_project_stats(selected_project)
+        stats_df = db.get_project_details(selected_project)
         if not stats_df.empty:
             stats = stats_df.iloc[0]
             c1, c2, c3, c4 = st.columns(4)
@@ -406,12 +512,26 @@ def project_view():
         
         # 3. Recupero dati con sintassi corretta per SQLAlchemy 2.0
         # Usiamo text() e conn.execute per essere sicuri che :pid venga letto
-        query = text(f"SELECT * FROM {db.schema}.individuals WHERE project_id = :pid")
+        individual_info = db.config["database"]["mapping"]["individual_id"]
+        project_info = db.config["database"]["mapping"]["project_id"]
+        material_info = db.config["database"]["mapping"]["material_description"]
+
+        individual_table = individual_info.get("base_table")
+        individual_key_col = individual_info.get("column_name")
+        project_col = project_info.get("column_name")
+
+        query = text(f"""
+            SELECT *
+            FROM {db.schema}.{individual_table}
+            WHERE {project_col} = :pid
+        """)
+
         mat_query = text(f"""
-            SELECT ps.material_description 
-            FROM {db.schema}.processed_samples ps
-            JOIN {db.schema}.individuals i ON ps.lab_id = i.lab_id
-            WHERE i.project_id = :pid
+            SELECT ps.{material_info["column_table"]}
+            FROM {db.schema}.{material_info["base_table"]} ps
+            JOIN {db.schema}.{individual_table} i
+            ON ps.{individual_key_col} = i.{individual_key_col}
+            WHERE i.{project_col} = :pid
         """)
 
         try:
@@ -421,7 +541,7 @@ def project_view():
                 # Carichiamo i dati dei materiali
                 mat_data = pd.read_sql(mat_query, conn, params={"pid": selected_project})
         except Exception as e:
-            st.error(f"Errore nel database: {e}")
+            st.error(f"Error in database: {e}")
             return
 
         # 4. Visualizzazione Tab
