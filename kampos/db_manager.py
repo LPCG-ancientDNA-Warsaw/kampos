@@ -76,7 +76,7 @@ class LabDatabase:
         # For each table name obtained through the metadata...
         for table_name in inspector.get_table_names(schema=self.schema):
             # ... add the table name to the graph dictionary and set an empty list as its value
-            graph[table_name] = []
+            graph.setdefault(table_name, [])
 
             # For each foreign key in that table...
             for fk in inspector.get_foreign_keys(table_name, schema=self.schema):
@@ -88,6 +88,8 @@ class LabDatabase:
 
                 if not source_columns or not target_columns:
                     continue
+
+                graph.setdefault(target_table, [])
 
                 graph[source_table].append((target_table, source_columns, target_columns))
                 graph[target_table].append((source_table, target_columns, source_columns))
@@ -168,8 +170,11 @@ class LabDatabase:
         # add all mapped fields
         for concept, info in mapping.items():
             if concept in requested_fields:
+                print(f"Getting field: {concept}")
                 target_table = info.get("base_table")
+                print(f"Its table is: {base_table}")
                 target_column = info.get("column_name")
+                print(f"Its column is: {target_column}")
 
                 # CASE 1: If the target table or column is not defined, we skip this field
                 if not target_table or not target_column:
@@ -599,6 +604,12 @@ class LabDatabase:
             return False
 
 
+    def _get_parent_for_sheet(self, sheet_name):
+        """Return the parent table for a sheet if a hierarchy entry exists."""
+        table_hierarchies = self.config.get("database", {}).get("table_hierarchies", {})
+        sheet_config = table_hierarchies.get(sheet_name, {})
+        return sheet_config.get("parent")
+
     def upload_from_excel(self, xlsx_path, schema=None):
         """
         This function uploads on the database the information provided through an Excel File.
@@ -649,8 +660,9 @@ class LabDatabase:
                         # If yes, tries to append the new data
                         try:
                             
-                            if sheet in self.config["database"]["table_hierarchies"].keys():
-                                self.check_parent_from_child(parent_name = self.config["database"]["table_hierarchies"][sheet]["parent"], child_dataframe=data, conn=conn)
+                            parent_name = self._get_parent_for_sheet(sheet)
+                            if parent_name:
+                                self.check_parent_from_child(parent_name=parent_name, child_dataframe=data, conn=conn)
 
                             print(f"Attempting to insert {len(data)} rows into {sheet}...")
 

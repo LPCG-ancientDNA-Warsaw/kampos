@@ -142,9 +142,11 @@ def home_page():
     #### General useful information
     
     try:
-
+        
         df = get_individuals_status(db.engine)
+        print("HOME: returned dataframe shape", df.shape)
         coords_all = get_map_coordinates(db.engine)
+        print("HOME: returned dataframe shape", coords_all.shape)
 
         # --- 1. FUNZIONE DI RICERCA MULTI-ID ---
         search_input = st.text_input("🔍 Search by Individual ID (separate multiple IDs with commas):", "").strip().upper()

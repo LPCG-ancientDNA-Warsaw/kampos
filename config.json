@@ -12,7 +12,7 @@
       },
       "site_name" : {
         "column_name" : "site_name",
-        "base_table" : "individuals"
+        "base_table" : "sampling_sites"
       },
       "epoch": {
         "column_name" : "epoch",
