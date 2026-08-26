@@ -22,15 +22,19 @@ class LabDatabase:
         self.db_name = self.config["database"]["db_name"]
         self.host = self.config["database"]["host"]
         self.port = self.config["database"]["port"]
-        self.schema = self.config["database"]["schema"]  #  atm supports the presence of only one schema per db
+        self.projects = [p["name"] for p in self.config["database"]["projects"]]
+        self.schemas = [p["schema_name"] for p in self.config["database"]["projects"]]
 
         if user and password:
             self.url = f"postgresql://{user}:{password}@{self.host}:{self.port}/{self.db_name}"
             self.engine = create_engine(self.url)
 
-    def get_column_values(self, table, schema = None, columns='all'):
+    def get_column_values(self, table, project = None, schema = None, columns='all'):
+        if project is not None:
+            schema = next((p["schema_name"] for p in self.config["database"]["projects"] if p["name"] == project), None)
+
         if schema is None:
-            schema = self.schema 
+            schema = self.schemas[0]  # Use the first schema as default
         
         with self.engine.connect() as conn:
             try:
@@ -62,11 +66,16 @@ class LabDatabase:
                 print(f"Error with the database: {e}")
                 return None
             
-    def _build_join_graph(self):
+    def _build_join_graph(self, project = None, schema = None):
         """
         Build a graph of table relationships based on foreign keys.
         Returns a dictionary where keys are table names and values are lists of tuples.
         """
+        if project is not None:
+            schema = next((p["schema_name"] for p in self.config["database"]["projects"] if p["name"] == project), None)
+
+        if schema is None:
+            schema = self.schemas[0]  # Use the first schema as default
 
         # Inspector retrieves metadata from the database.
         inspector = inspect(self.engine)
@@ -74,12 +83,12 @@ class LabDatabase:
         graph = {}
 
         # For each table name obtained through the metadata...
-        for table_name in inspector.get_table_names(schema=self.schema):
+        for table_name in inspector.get_table_names(schema):
             # ... add the table name to the graph dictionary and set an empty list as its value
             graph.setdefault(table_name, [])
 
             # For each foreign key in that table...
-            for fk in inspector.get_foreign_keys(table_name, schema=self.schema):
+            for fk in inspector.get_foreign_keys(table_name, schema):
 
                 source_table = table_name
                 target_table = fk['referred_table']
@@ -131,8 +140,23 @@ class LabDatabase:
         # CASE 3: If we finish the search and we haven't found the target, we return None
         return None
 
-    def _build_sample_details_query(self):
-        mapping = self.config["database"]["mapping"]
+    def _build_sample_details_query(self, project = None, schema = None):
+        if project is not None:
+            schema = next((p["schema_name"] for p in self.config["database"]["projects"] if p["name"] == project), None)
+
+        if schema is None:
+            schema = self.schemas[0]  # Use the first schema as default
+
+        project_config = next(
+            (p for p in self.config["database"]["projects"] if p["schema_name"] == schema),
+            None
+        )
+
+        if project_config:
+            mapping = project_config["mapping"]
+        else:
+            raise ValueError(f"No configuration found for schema: {schema}")
+
 
         # We use individual_id as the base column for the query (we use .get to avoid crashing)
         base_entry = mapping.get("individual_id", {})
@@ -144,7 +168,7 @@ class LabDatabase:
         if not any([base_table, base_key_col]):
             raise ValueError("mapping['individual_id'] information is required. Please check config.json.")
 
-        graph = self._build_join_graph()
+        graph = self._build_join_graph(project=project, schema=schema)
 
         # Here we initialize the SELECT and JOIN parts of the SQL query
         select_parts = []
@@ -214,7 +238,7 @@ class LabDatabase:
                         # And then now that we have the name of the table, and the condition for the JOIN
                         # we create the JOIN line itself
                         join_parts.append(
-                            f"LEFT JOIN {self.schema}.{next_table} AS {next_table} "
+                            f"LEFT JOIN {schema}.{next_table} AS {next_table} "
                             f"ON {' AND '.join(join_conditions)}"
                         )
 
@@ -232,20 +256,34 @@ class LabDatabase:
             sql = f"""
                 SELECT
                     {', '.join(select_parts)}
-                FROM {self.schema}.{base_table} AS base
+                FROM {schema}.{base_table} AS base
                 {' '.join(join_parts)}
                 WHERE base.{base_key_col} = :individual_id
             """
 
         return text(sql)
 
-    def get_sample_details(self, individual_id):
-        query = self._build_sample_details_query()
+    def get_sample_details(self, individual_id, project=None, schema=None):
+        query = self._build_sample_details_query(project=project, schema=schema)
         return pd.read_sql(query, self.engine, params={"individual_id": individual_id})
 
 
-    def _build_long_sample_details_query(self):
-        mapping = self.config["database"]["mapping"]
+    def _build_long_sample_details_query(self, project = None, schema = None):
+        if project is not None:
+            schema = next((p["schema_name"] for p in self.config["database"]["projects"] if p["name"] == project), None)
+
+        if schema is None:
+            schema = self.schemas[0]  # Use the first schema as default
+
+        project_config = next(
+            (p for p in self.config["database"]["projects"] if p["schema_name"] == schema),
+            None
+        )
+
+        if project_config:
+            mapping = project_config["mapping"]
+        else:
+            raise ValueError(f"No configuration found for schema: {schema}")
 
         # We use individual_id as the base column for the query (we use .get to avoid crashing)
         base_entry = mapping.get("individual_id", {})
@@ -257,7 +295,7 @@ class LabDatabase:
         if not any([base_table, base_key_col]):
             raise ValueError("mapping['individual_id'] information is required. Please check config.json.")
 
-        graph = self._build_join_graph()
+        graph = self._build_join_graph(project=project, schema=schema)
 
         # Here we initialize the SELECT and JOIN parts of the SQL query
         select_parts = []
@@ -311,7 +349,7 @@ class LabDatabase:
                     # And then now that we have the name of the table, and the condition for the JOIN
                     # we create the JOIN line itself
                     join_parts.append(
-                        f"LEFT JOIN {self.schema}.{next_table} AS {next_table} "
+                        f"LEFT JOIN {schema}.{next_table} AS {next_table} "
                         f"ON {' AND '.join(join_conditions)}"
                     )
 
@@ -329,19 +367,33 @@ class LabDatabase:
         sql = f"""
             SELECT
                 {', '.join(select_parts)}
-            FROM {self.schema}.{base_table} AS base
+            FROM {schema}.{base_table} AS base
             {' '.join(join_parts)}
             WHERE base.{base_key_col} = :individual_id
         """
 
         return text(sql)
 
-    def get_long_sample_details(self, individual_id):
-        query = self._build_long_sample_details_query()
+    def get_long_sample_details(self, individual_id, project=None, schema=None):
+        query = self._build_long_sample_details_query(project=project, schema=schema)
         return pd.read_sql(query, self.engine, params={"individual_id": individual_id})
     
-    def _build_project_details_query(self):
-        mapping = self.config["database"]["mapping"]
+    def _build_project_details_query(self, project = None, schema = None):
+        if project is not None:
+            schema = next((p["schema_name"] for p in self.config["database"]["projects"] if p["name"] == project), None)
+
+        if schema is None:
+            schema = self.schemas[0]  # Use the first schema as default
+        
+        project_config = next(
+            (p for p in self.config["database"]["projects"] if p["schema_name"] == schema),
+            None
+        )
+
+        if project_config:
+            mapping = project_config["mapping"]
+        else:
+            raise ValueError(f"No configuration found for schema: {schema}")
 
         base_entry = mapping.get("individual_id", {})
         base_table = base_entry.get("base_table")
@@ -353,7 +405,7 @@ class LabDatabase:
         if not any([base_table, base_key_col]):
             raise ValueError("mapping['individual_id'] information is required. Please check config.json.")
         
-        graph = self._build_join_graph()
+        graph = self._build_join_graph(project=project, schema=schema)
 
         requested_fields = {
             "individual_id" : ["total_individuals", "COUNT(DISTINCT)"],
@@ -406,7 +458,7 @@ class LabDatabase:
                             )
 
                         join_parts.append(
-                            f"LEFT JOIN {self.schema}.{next_table} AS {next_table} "
+                            f"LEFT JOIN {schema}.{next_table} AS {next_table} "
                             f"ON {' AND '.join(join_conditions)}"  
                         )
 
@@ -423,28 +475,31 @@ class LabDatabase:
         sql = f"""
             SELECT
                 {', '.join(select_parts)}
-            FROM {self.schema}.{base_table} AS base
+            FROM {schema}.{base_table} AS base
             {' '.join(join_parts)}
             WHERE base.{project_col} = :project_id
         """
         return text(sql)
 
-    def get_project_details(self, project_id):
-        query = self._build_project_details_query()
+    def get_project_details(self, project_id, project=None, schema=None):
+        query = self._build_project_details_query(project=project, schema=schema)
         return pd.read_sql(query, self.engine, params={"project_id": project_id})
 
-    def get_primary_keys(self, table_name, schema=None):
+    def get_primary_keys(self, table_name, schema=None, project=None):
         """
         Recover the primary keys of a table in the database.
         """
+        if project is not None:
+            schema = next((p["schema_name"] for p in self.config["database"]["projects"] if p["name"] == project), None)
+
         if schema is None:
-            schema = self.schema 
+            schema = self.schemas[0]  # Use the first schema as default
 
         inspector = inspect(self.engine)
         pk_columns = inspector.get_pk_constraint(table_name, schema)
         return pk_columns.get('constrained_columns', [])
 
-    def check_parent_from_child(self, parent_name, child_dataframe, conn, schema=None):
+    def check_parent_from_child(self, parent_name, child_dataframe, conn, schema=None, project=None):
         """
         This function checks for parent table information when uploading child table information.
         If any new rows are present, they are added and committed to the server.
@@ -458,10 +513,14 @@ class LabDatabase:
         Output:
         - Pass
         """
+        if project is not None:
+            schema = next((p["schema_name"] for p in self.config["database"]["projects"] if p["name"] == project), None)
+
         if schema is None:
-            schema = self.schema 
+            schema = self.schemas[0]  # Use the first schema as defaulta 
+        
         # 1. Recupera i nomi delle colonne della Primary Key del parent
-        pk_columns = self.get_primary_keys(parent_name, schema)
+        pk_columns = self.get_primary_keys(parent_name, schema, project)
         if not pk_columns:
             print(f"Error: No primary key found for: {parent_name}")
             return
@@ -502,18 +561,21 @@ class LabDatabase:
         
 
 
-    def safe_update_table(self, table_name, edited_df, schema=None):
+    def safe_update_table(self, table_name, edited_df, schema=None, project=None):
         """
         Updates table taking into consideration the primary keys of the table. 
         If a row with the same primary key exists, it will be updated; otherwise, it will be inserted.
         """
+        if project is not None:
+            schema = next((p["schema_name"] for p in self.config["database"]["projects"] if p["name"] == project), None)
+
         if schema is None:
-            schema = self.schema 
+            schema = self.schemas[0]  # Use the first schema as default
 
         if edited_df.empty:
             return True
 
-        pk_cols = self.get_primary_keys(table_name)
+        pk_cols = self.get_primary_keys(table_name, schema=schema, project=project)
         if not pk_cols:
             print(f"Error: No primary key found for table {table_name}. Cannot perform UPSERT.")
             return False
@@ -610,7 +672,7 @@ class LabDatabase:
         sheet_config = table_hierarchies.get(sheet_name, {})
         return sheet_config.get("parent")
 
-    def upload_from_excel(self, xlsx_path, schema=None):
+    def upload_from_excel(self, xlsx_path, schema=None, project=None):
         """
         This function uploads on the database the information provided through an Excel File.
 
@@ -620,8 +682,11 @@ class LabDatabase:
         Ouput:
         - Pass
         """
+        if project is not None:
+            schema = next((p["schema_name"] for p in self.config["database"]["projects"] if p["name"] == project), None)
+
         if schema is None:
-            schema = self.schema
+            schema = self.schemas[0]  # Use the first schema as default
             
         # Parse full Excel file
         excel_file = pd.ExcelFile(xlsx_path)
@@ -662,7 +727,7 @@ class LabDatabase:
                             
                             parent_name = self._get_parent_for_sheet(sheet)
                             if parent_name:
-                                self.check_parent_from_child(parent_name=parent_name, child_dataframe=data, conn=conn)
+                                self.check_parent_from_child(parent_name=parent_name, child_dataframe=data, conn=conn, schema=schema, project=project)
 
                             print(f"Attempting to insert {len(data)} rows into {sheet}...")
 
@@ -670,7 +735,7 @@ class LabDatabase:
                                 if col in data.columns:
                                     data[col] = data[col].fillna(val)
                             
-                            success = self.safe_update_table(sheet, data)
+                            success = self.safe_update_table(sheet, data, schema=schema, project=project)
 
                             if not success:
                                 failed_sheets.append(sheet)
@@ -719,7 +784,7 @@ class LabDatabase:
 
         pass
 
-    def get_tables_names(self, schema = None):
+    def get_tables_names(self, schema = None, project = None):
         """
         Obtain tables names from the database.
 
@@ -729,8 +794,11 @@ class LabDatabase:
         Output:
         - a list of tables names.
         """
+        if project is not None:
+            schema = next((p["schema_name"] for p in self.config["database"]["projects"] if p["name"] == project), None)
+
         if schema is None:
-            schema = self.schema
+            schema = self.schemas[0]  # Use the first schema as default
 
         inspector = inspect(self.engine)
 
@@ -739,7 +807,7 @@ class LabDatabase:
         return tables
 
 
-    def run_backup(self, schema = None):
+    def run_backup(self, schema = None, project = None):
         """Executes the backup of the .tsv and .xlsx files.
         
         Input:
@@ -748,18 +816,26 @@ class LabDatabase:
         Ouput:
         - Pass
         """
-        if schema == None:
-            schema = self.schema
+        if project is not None:
+            schema = next((p["schema_name"] for p in self.config["database"]["projects"] if p["name"] == project), None)
+
+        if schema is None:
+            schema = self.schemas[0]  # Use the first schema as default
 
         # 1. Obtain current timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M")
         os.makedirs("./backups", exist_ok = True)
+
+        # Dopo:
+        project_config = next((p for p in self.config["database"]["projects"] if p["schema_name"] == schema), self.config["database"]["projects"][0])
         
         # 2. Export View TSV
         tsv_file = f"./backups/view_report_{timestamp}.tsv"
         all_individual_ids = self.get_column_values(
-            table=self.config["database"]["mapping"]["individual_id"]["base_table"],
-            columns=self.config["database"]["mapping"]["individual_id"]["column_name"],
+            table = project_config["mapping"]["individual_id"]["base_table"],
+            columns= project_config["mapping"]["individual_id"]["column_name"],
+            schema=schema,
+            project=project
         )
         requested_fields = [
             "individual_id",
@@ -775,7 +851,7 @@ class LabDatabase:
 
         details_frames = []
         for individual_id in all_individual_ids:
-            df = self.get_sample_details(individual_id)
+            df = self.get_sample_details(individual_id, project=project, schema=schema)
             if df.empty:
                 continue
 
@@ -797,7 +873,7 @@ class LabDatabase:
         # 3. Export Excel
         excel_file = f"./backups/full_lab_backup_{timestamp}.xlsx"
 
-        tables = self.get_tables_names()
+        tables = self.get_tables_names(schema=schema, project=project)
         with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
             for table_name in tables:
                 # Leggiamo la tabella dal DB

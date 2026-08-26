@@ -72,12 +72,52 @@ db = get_database_connection()
 if db:
     st.write(f"Welcome to database **{db.db_name}**!")
 
+def get_active_project_context():
+    project_entries = db.config["database"]["projects"]
+    labels = [p.get("name") or p.get("schema_name") for p in project_entries]
+
+    if "selected_project_label" not in st.session_state:
+        st.session_state.selected_project_label = labels[0]
+
+    selected_label = st.sidebar.selectbox(
+        "Project",
+        options=labels,
+        index=labels.index(st.session_state.selected_project_label),
+    )
+
+    st.session_state.selected_project_label = selected_label
+
+    selected_project = next(
+        (p.get("name") for p in project_entries if (p.get("name") or p.get("schema_name")) == selected_label),
+        None
+    )
+
+    selected_schema = next(
+        (p.get("schema_name") for p in project_entries if (p.get("name") or p.get("schema_name")) == selected_label),
+        None
+    )
+
+    return selected_project, selected_schema
+
 # Cached memory
 @st.cache_data
-def get_individuals_status(_db_engine):
+def get_individuals_status(_db_engine, project, schema):
+
+    project_config = next(
+    (
+        p for p in db.config["database"]["projects"]
+        if (project is not None and p.get("name") == project)
+        or (schema is not None and p.get("schema_name") == schema)
+    ),
+    db.config["database"]["projects"][0])
+
+    mapping = project_config["mapping"]
+
     all_individual_ids = db.get_column_values(
-        table=db.config["database"]["mapping"]["individual_id"]["base_table"],
-        columns=db.config["database"]["mapping"]["individual_id"]["column_name"],)
+        table=mapping["individual_id"]["base_table"],
+        project=project,
+        schema=schema,
+        columns=mapping["individual_id"]["column_name"])
 
     requested_fields = [
         "individual_id",
@@ -92,7 +132,7 @@ def get_individuals_status(_db_engine):
     
     details_frames = []
     for individual_id in all_individual_ids:
-        df = db.get_sample_details(individual_id)
+        df = db.get_sample_details(individual_id, project=project, schema=schema)
         if df.empty:
             continue
     
@@ -109,12 +149,21 @@ def get_individuals_status(_db_engine):
     return combined_df
 
 @st.cache_data
-def get_map_coordinates(_db_engine):
-    """Scarica le coordinate e le salva in memoria."""
-    individual_id_column_name = db.config["database"]["mapping"]["individual_id"]["column_name"]
-    individual_id_table = db.config["database"]["mapping"]["individual_id"]["base_table"]
-    coord_ns_info = db.config["database"]["mapping"]["coord_ns"]
-    coord_we_info =  db.config["database"]["mapping"]["coord_we"]
+def get_map_coordinates(_db_engine, schema=None, project=None):
+    project_config = next(
+    (
+        p for p in db.config["database"]["projects"]
+        if (project is not None and p.get("name") == project)
+        or (schema is not None and p.get("schema_name") == schema)
+    ),
+    db.config["database"]["projects"][0])
+
+    mapping = project_config["mapping"]
+
+    individual_id_column_name = mapping["individual_id"]["column_name"]
+    individual_id_table = mapping["individual_id"]["base_table"]
+    coord_ns_info = mapping["coord_ns"]
+    coord_we_info = mapping["coord_we"]
     coords_table = coord_ns_info["base_table"]
 
     if not individual_id_column_name or not individual_id_table:
@@ -129,23 +178,23 @@ def get_map_coordinates(_db_engine):
         SELECT {individual_id_column_name} AS individual_id,
                {coord_ns_info["column_name"]} AS coord_ns, 
                {coord_we_info["column_name"]} AS coord_we
-        FROM {db.schema}.{individual_id_table}
+        FROM {schema}.{individual_id_table}
         """
     else:
         query = f"""
         SELECT i.{individual_id_column_name} AS individual_id, 
                c.{coord_ns_info["column_name"]} AS coord_ns,
                c.{coord_we_info["column_name"]} AS coord_we
-        FROM {db.schema}.{individual_id_table} AS i
-        LEFT JOIN {db.schema}.{coords_table} AS c
+        FROM {schema}.{individual_id_table} AS i
+        LEFT JOIN {schema}.{coords_table} AS c
         ON i.{individual_id_column_name} = c.{individual_id_column_name}
         """
     
     return pd.read_sql(query, _db_engine).dropna()
 
 @st.cache_data
-def get_any_table(_db_engine, table_name):
-    query = f"SELECT * FROM {db.schema}.{table_name}"
+def get_any_table(_db_engine, table_name, schema=None):
+    query = f"SELECT * FROM {schema}.{table_name}"
     return pd.read_sql(query, _db_engine)
 
 @st.cache_data
@@ -175,15 +224,16 @@ st.subheader("", divider = 'orange')
 
 # Defining pages:
 def home_page():
+    selected_project, selected_schema = get_active_project_context()
 #if choice == "Home page":
     st.subheader("Home page")
     #### General useful information
     
     try:
         
-        df = get_individuals_status(db.engine)
+        df = get_individuals_status(db.engine, project=selected_project, schema=selected_schema)
         print("HOME: returned dataframe shape", df.shape)
-        coords_all = get_map_coordinates(db.engine)
+        coords_all = get_map_coordinates(db.engine, schema=selected_schema)
         print("HOME: returned dataframe shape", coords_all.shape)
 
         # --- 1. FUNZIONE DI RICERCA MULTI-ID ---
@@ -273,13 +323,14 @@ def home_page():
         st.error(f"Error: {e}")
 
 def full_db():
+    selected_project, selected_schema = get_active_project_context()
 #elif choice == "Full database":
     st.subheader("Full Database")
-    options = db.get_tables_names()
+    options = db.get_tables_names(schema=selected_schema, project=selected_project)
     selection = st.pills("Tables", options, selection_mode = 'single')
 
     if selection:
-        df = get_any_table(db.engine, selection)
+        df = get_any_table(db.engine, selection, schema=selected_schema)
         
         tsv_data = df.to_csv(sep='\t', index=False).encode('utf-8')
         tsv_file_name = f"table_{selection}.tsv"
@@ -290,6 +341,7 @@ def full_db():
         st.text("Please select one option to display table information.")
 
 def upload_data():
+    selected_project, selected_schema = get_active_project_context()
 #elif choice == "Upload Data from Excel":
     st.subheader("Upload Excel")
     try:
@@ -302,7 +354,7 @@ def upload_data():
     
     if uploaded_file and st.button("Upload on Database"):
         try:
-            db.upload_from_excel(uploaded_file)
+            db.upload_from_excel(uploaded_file, schema=selected_schema)
 
             st.cache_data.clear()
 
@@ -311,17 +363,18 @@ def upload_data():
             st.error(f"Error during upload: {e}")
 
 def edit_entries():
+    selected_project, selected_schema = get_active_project_context()
 #elif choice == "Edit entries":
     st.subheader("Edit entries")
     
-    options = db.get_tables_names()
+    options = db.get_tables_names(schema=selected_schema, project=selected_project)
     selection = st.pills("Select Table", options, selection_mode='single')
 
     if selection:
         # 1. CONTROLLO CACHE INTERNA: Carichiamo dal DB solo se la tabella è cambiata
         if "last_selection" not in st.session_state or st.session_state.last_selection != selection:
             with st.spinner(f"Loading {selection}..."):
-                st.session_state.df_to_edit = pd.read_sql(f"SELECT * FROM {db.schema}.{selection}", db.engine)
+                st.session_state.df_to_edit = pd.read_sql(f"SELECT * FROM {selected_schema}.{selection}", db.engine)
                 st.session_state.last_selection = selection
 
         # 2. L'EDITOR usa i dati in memoria (super veloce)
@@ -336,7 +389,7 @@ def edit_entries():
         # 3. SALVATAGGIO
         if st.button("💾 Save all changes"):
             with st.spinner("Synchronizing with Database..."):
-                success = db.safe_update_table(selection, edited_df)
+                success = db.safe_update_table(selection, edited_df, schema=selected_schema, project=selected_project)
                 if success:
                     st.success("Database updated!")
                     # Aggiorniamo la memoria interna con i nuovi dati salvati
@@ -346,6 +399,11 @@ def edit_entries():
         st.text("Please select one option to start editing.")
 
 def backup():
+    ############## THERE IS THE NEED TO MANAGE BACKUPS FOR EACH SCHEMA!!!!!!!!!!!!!!
+
+
+    selected_project, selected_schema = get_active_project_context()
+
     st.subheader("💾 Backup Management")
     st.text("The backup files are automatically saved at the first edit of the day.")
 
@@ -408,16 +466,29 @@ def backup():
             st.rerun() 
 
 def sample_view():
+    selected_project, selected_schema = get_active_project_context()
     st.title("🧬 Sample Detailed View")
-    id_info = db.config["database"]["mapping"]["individual_id"]
+
+    project_config = next(
+                (p for p in db.config["database"]["projects"] if p["schema_name"] == selected_schema),
+                None
+            )
+
+    if project_config:
+        mapping = project_config["mapping"]
+    else:
+        raise ValueError(f"No configuration found for schema: {selected_schema}")
+
+    id_info = mapping["individual_id"]
+
     # 1. Ricerca del Lab ID
     # Suggerimento: potresti caricare la lista di tutti i lab_id per un autocomplete
-    all_ids = db.get_column_values(table=id_info["base_table"], columns=id_info["column_name"])
+    all_ids = db.get_column_values(table=id_info["base_table"], columns=id_info["column_name"], schema=selected_schema)
     target_id = st.selectbox("Search for a Lab ID:", [""] + all_ids, placeholder = "Start typing an individual ID...", filter_mode = "prefix")
 
     
     if target_id:
-        data = db.get_long_sample_details(target_id)
+        data = db.get_long_sample_details(target_id, project=selected_project, schema=selected_schema)
         print(data)
 
         if data.empty:
@@ -528,15 +599,27 @@ def sample_view():
 
 def project_view():
     st.title("📁 Project Management Overview")
+
+    selected_project, selected_schema = get_active_project_context()
+
+    project_config = next(
+                (p for p in db.config["database"]["projects"] if p["schema_name"] == selected_schema),
+                None
+            )
+
+    if project_config:
+        mapping = project_config["mapping"]
+    else:
+        raise ValueError(f"No configuration found for schema: {selected_schema}")
     
     # 1. Recupero lista progetti
-    project_info = db.config["database"]["mapping"]["project_id"]
-    project_list = db.get_column_values(table=project_info["base_table"], columns=project_info["column_name"])
-    selected_project = st.selectbox("Select Project:", [""] + project_list)
+    project_info = mapping["project_id"]
+    project_list = db.get_column_values(table=project_info["base_table"], columns=project_info["column_name"], schema=selected_schema)
+    selected_project_ID = st.selectbox("Select Project ID:", [""] + project_list)
     
-    if selected_project:
+    if selected_project_ID:
         # 2. Statistiche KPI
-        stats_df = db.get_project_details(selected_project)
+        stats_df = db.get_project_details(selected_project_ID, schema=selected_schema)
         if not stats_df.empty:
             stats = stats_df.iloc[0]
             c1, c2, c3, c4 = st.columns(4)
@@ -552,9 +635,9 @@ def project_view():
         
         # 3. Recupero dati con sintassi corretta per SQLAlchemy 2.0
         # Usiamo text() e conn.execute per essere sicuri che :pid venga letto
-        individual_info = db.config["database"]["mapping"]["individual_id"]
-        project_info = db.config["database"]["mapping"]["project_id"]
-        material_info = db.config["database"]["mapping"]["material_description"]
+        individual_info = mapping["individual_id"]
+        project_info = mapping["project_id"]
+        material_info = mapping["material_description"]
 
         individual_table = individual_info.get("base_table")
         individual_key_col = individual_info.get("column_name")
@@ -562,14 +645,14 @@ def project_view():
 
         query = text(f"""
             SELECT *
-            FROM {db.schema}.{individual_table}
+            FROM {selected_schema}.{individual_table}
             WHERE {project_col} = :pid
         """)
 
         mat_query = text(f"""
             SELECT ps.{material_info["column_table"]}
-            FROM {db.schema}.{material_info["base_table"]} ps
-            JOIN {db.schema}.{individual_table} i
+            FROM {selected_schema}.{material_info["base_table"]} ps
+            JOIN {selected_schema}.{individual_table} i
             ON ps.{individual_key_col} = i.{individual_key_col}
             WHERE i.{project_col} = :pid
         """)
@@ -577,9 +660,9 @@ def project_view():
         try:
             with db.engine.connect() as conn:
                 # Carichiamo i dati degli individui
-                full_data = pd.read_sql(query, conn, params={"pid": selected_project})
+                full_data = pd.read_sql(query, conn, params={"pid": selected_project_ID})
                 # Carichiamo i dati dei materiali
-                mat_data = pd.read_sql(mat_query, conn, params={"pid": selected_project})
+                mat_data = pd.read_sql(mat_query, conn, params={"pid": selected_project_ID})
         except Exception as e:
             st.error(f"Error in database: {e}")
             return
@@ -623,7 +706,7 @@ def project_view():
             st.download_button(
                 label="📥 Download CSV",
                 data=csv,
-                file_name=f"{selected_project.replace(' ', '_')}_data.csv",
+                file_name=f"{selected_project_ID.replace(' ', '_')}_data.csv",
                 mime="text/csv",
             )
 
