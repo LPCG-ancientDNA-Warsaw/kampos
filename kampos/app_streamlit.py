@@ -1,3 +1,4 @@
+from psycopg2 import OperationalError
 import streamlit as st
 from db_manager import LabDatabase
 import pandas as pd
@@ -6,6 +7,7 @@ import os
 from datetime import datetime
 import plotly.express as px
 from sqlalchemy import text
+from pathlib import Path
 
 @st.cache_resource(show_spinner="Connecting to the database...")
 def init_db(user, password):
@@ -25,10 +27,42 @@ def get_database_connection():
             db = init_db(db_user, db_password)
             st.sidebar.success("Connection established!")
             return db
-        
-        except Exception as e:
-            st.sidebar.error("Impossible to establish a connection: check your credentials or the database's status.")
+
+
+        # 1. Dipendenze mancanti (es. psycopg2 non installato)
+        except (ModuleNotFoundError, ImportError):
+            st.sidebar.error(
+                "Dependency missing! Did you install the required packages from `pyrproject.toml`?"
+            )
             return None
+
+        # 2. Problemi di rete, credenziali o stato del Database
+        except OperationalError as e:
+            error_msg = str(e).lower()
+
+            if "password authentication failed" in error_msg or "access denied" in error_msg:
+                st.sidebar.error("Username or password not correct.")
+            
+            elif "could not connect to server" in error_msg or "connection refused" in error_msg:
+                st.sidebar.error(
+                    "Database not reachable!"
+                    "The server seems to be down, the IP/host in `config.json` is incorrect, "
+                    "or you need the university's VPN."
+                )
+            
+            elif "database" in error_msg and "does not exist" in error_msg:
+                st.sidebar.error("Database not found! The database name specified in `config.json` does not exist.")
+            
+            else:
+                st.sidebar.error(f"Database Operational Error: {e.orig if hasattr(e, 'orig') else e}")
+            
+            return None
+
+        # 3. Fallback per qualsiasi altro errore imprevisto
+        except Exception as e:
+            st.sidebar.error(f"Generic Error: {e}")
+            return None
+        
     else:
         st.warning("Please provide your credentials.")
         return None
@@ -121,12 +155,16 @@ def get_backup_files(path, extension):
     return sorted(files, key=os.path.getctime, reverse=True)
 
 # Page title
-st.set_page_config(page_title = "Kampos: Lab Database Portal", layout = "wide", page_icon = "static/transparent_LPCG_logo.png")
-st.logo("static/LPiGK_transparent.png", size = "large", icon_image = "static/transparent_LPCG_logo.png")
+base = Path(__file__).resolve().parent.parent
+logo = base / "static" / "LPiGK_transparent.png"
+page_icon = base / "static" / "transparent_LPCG_logo.png"
+
+st.set_page_config(page_title = "Kampos: Lab Database Portal", layout = "wide", page_icon = page_icon)
+st.logo(logo, size = "large", icon_image = page_icon)
 
 col1, col2 = st.columns([1, 3])
 with col1:
-    st.image("static/LPiGK_transparent.png", width = 800)
+    st.image(logo, width = 800)
 with col2:
     st.markdown("#")
     st.title("Kampos: Keep All Metadata Properly and Orderly Stored")
