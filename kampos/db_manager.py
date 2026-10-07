@@ -194,11 +194,11 @@ class LabDatabase:
         # add all mapped fields
         for concept, info in mapping.items():
             if concept in requested_fields:
-                print(f"Getting field: {concept}")
+                
                 target_table = info.get("base_table")
-                print(f"Its table is: {base_table}")
+                
                 target_column = info.get("column_name")
-                print(f"Its column is: {target_column}")
+                
 
                 # CASE 1: If the target table or column is not defined, we skip this field
                 if not target_table or not target_column:

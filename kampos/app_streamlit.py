@@ -32,7 +32,7 @@ def get_database_connection():
         # 1. Dipendenze mancanti (es. psycopg2 non installato)
         except (ModuleNotFoundError, ImportError):
             st.sidebar.error(
-                "Dependency missing! Did you install the required packages from `pyrproject.toml`?"
+                "Dependency missing! Did you install the required packages from `pyproject.toml`?"
             )
             return None
 
@@ -162,29 +162,29 @@ def get_map_coordinates(_db_engine, schema=None, project=None):
 
     individual_id_column_name = mapping["individual_id"]["column_name"]
     individual_id_table = mapping["individual_id"]["base_table"]
-    coord_ns_info = mapping["coord_ns"]
-    coord_we_info = mapping["coord_we"]
-    coords_table = coord_ns_info["base_table"]
+    coord_ns_info_column_name = mapping["coord_ns"]["column_name"]
+    coord_we_info_column_name = mapping["coord_we"]["column_name"]
+    coords_table = coord_ns_info_column_name["base_table"]
 
     if not individual_id_column_name or not individual_id_table:
         raise ValueError("The mapping for individual_id is incomplete in config.json")
 
-    if not coord_ns_info.get("column_name") or not coord_we_info.get("column_name"):
+    if not coord_ns_info_column_name or not coord_we_info_column_name:
         raise ValueError("The mapping for coord_ns/coord_we is incomplete in config.json")
 
 
     if str(individual_id_table).lower() == str(coords_table).lower():
         query = f"""
         SELECT {individual_id_column_name} AS individual_id,
-               {coord_ns_info["column_name"]} AS coord_ns, 
-               {coord_we_info["column_name"]} AS coord_we
+               {coord_ns_info_column_name} AS coord_ns, 
+               {coord_we_info_column_name} AS coord_we
         FROM {schema}.{individual_id_table}
         """
     else:
         query = f"""
         SELECT i.{individual_id_column_name} AS individual_id, 
-               c.{coord_ns_info["column_name"]} AS coord_ns,
-               c.{coord_we_info["column_name"]} AS coord_we
+               c.{coord_ns_info_column_name} AS coord_ns,
+               c.{coord_we_info_column_name} AS coord_we
         FROM {schema}.{individual_id_table} AS i
         LEFT JOIN {schema}.{coords_table} AS c
         ON i.{individual_id_column_name} = c.{individual_id_column_name}
@@ -232,9 +232,9 @@ def home_page():
     try:
         
         df = get_individuals_status(db.engine, project=selected_project, schema=selected_schema)
-        print("HOME: returned dataframe shape", df.shape)
+        
         coords_all = get_map_coordinates(db.engine, schema=selected_schema)
-        print("HOME: returned dataframe shape", coords_all.shape)
+        
 
         # --- 1. FUNZIONE DI RICERCA MULTI-ID ---
         search_input = st.text_input("🔍 Search by Individual ID (separate multiple IDs with commas):", "").strip().upper()
@@ -489,7 +489,6 @@ def sample_view():
     
     if target_id:
         data = db.get_long_sample_details(target_id, project=selected_project, schema=selected_schema)
-        print(data)
 
         if data.empty:
             st.warning("No data found for this ID.")
@@ -712,7 +711,6 @@ def project_view():
 
 
 # 3. CONFIGURAZIONE NAVIGAZIONE
-# Puoi dividere le pagine in gruppi (sezioni)
 pg = st.navigation({
     "Management": [
         st.Page(home_page, title="Home", icon="🏠"),

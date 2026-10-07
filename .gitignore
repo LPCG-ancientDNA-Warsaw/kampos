@@ -1,6 +1,8 @@
 .env
-kampos/commands/__pycache__/
+*/kampos/__pycache__
 *.log
 backups/
 sql/seed_db.sql
 tests/test_upload_excel.xlsx
+*__pycache__*
+*.pyc
