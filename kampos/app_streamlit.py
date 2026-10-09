@@ -11,7 +11,18 @@ from pathlib import Path
 
 @st.cache_resource(show_spinner="Connecting to the database...")
 def init_db(user, password):
+    """Initiates the Database Object.
+    
+    Inputs:
+    - user: user name.
+    - password: password used by the user.
+    
+    Output:
+    - db: an initialized instance of an oject of class Database."""
+
     db = LabDatabase(user=user, password=password)
+
+    # Establish a connection.
     with db.engine.connect() as conn:
         pass
     

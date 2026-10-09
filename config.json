@@ -3,11 +3,13 @@
     "db_name": "lpcgdb01",
     "host": "localhost",
     "port": "5432",
+    "type": "postgresql",
     
     "projects": [
       {
         "name": "human",
         "schema_name": "lab_data",
+        "backups_path": "",
 
         "mapping": {
           "individual_id" : {
@@ -102,6 +104,17 @@
             "column_name" : "fastq_name",
             "base_table" : "dna_sequencing"
           }
+        },
+
+        "summaries_fields" : {
+          "individual" : ["site_name",
+            "material_id",
+            "prep_date",
+            "extract_date",
+            "library_id",
+            "raw_reads",
+            "endo_dna",
+            "tot_reads_map"]
         },
 
         "table_hierarchies": {
