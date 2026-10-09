@@ -10,6 +10,7 @@ from contextlib import closing
 from datetime import datetime
 import json
 from pathlib import Path
+import io
 
 class LabDatabase:
     """This class defines what a Database is.
@@ -35,6 +36,7 @@ class LabDatabase:
             - get_primary_keys(table_name, schema=None, project=None).
             - check_parent_from_child(parent_name, child_dataframe, conn, schema=None, project=None).
             - safe_update_table(table_name, edited_df, schema=None, project=None).
+            - generate_excel_template(schema = None, project = None).
             - upload_from_excel(xlsx_path, schema=None, project=None).
             - get_tables_names(self, schema = None, project = None).
             - save_backup(target, writer, keep_existing=False).
@@ -883,6 +885,35 @@ class LabDatabase:
         sheet_config = table_hierarchies.get(sheet_name, {})
         return sheet_config.get("parent")
 
+    def generate_excel_template(self, schema = None, project = None):
+        """
+        Generates the Excel upload template dinamically.
+        
+        Inputs:
+        - project: macroproject name. Optional.
+        - schema: schema name. Optional.
+
+        Outputs:
+
+        """
+        if schema is None:
+            if project is not None:
+                schema = next((p["schema_name"] for p in self.config["database"]["projects"] if p["name"] == project), None)
+            else:
+                schema = self.schemas[0]
+
+        inspector = inspect(self.engine)
+        tables = inspector.get_table_names(schema=schema)
+
+        output_path = Path(__file__).resolve().parent.parent / "templates" / f"{schema}_excel_upload.xlsx"
+
+        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+            for table in tables:
+                columns = [col['name'] for col in inspector.get_columns(table, schema=schema)]
+                
+                empty_df = pd.DataFrame(columns=columns)
+                empty_df.to_excel(writer, sheet_name=table, index=False)
+
     def upload_from_excel(self, xlsx_path, schema=None, project=None):
         """
         This function uploads on the database the information provided through an Excel File.
@@ -1082,11 +1113,17 @@ class LabDatabase:
         try:
             writer(temporary)
             os.replace(temporary, target)
+            print(f"Created backup: {target}")
+            return True
+        except Exception as e:
+            print(f"Backup failed for {target.name}: {e}")
+            return False
         finally:
             if temporary.exists():
-                temporary.unlink()
-
-        print(f"Created backup: {target}")
+                try:
+                    temporary.unlink()
+                except Exception:
+                    pass
 
     def write_postgresql_dump(self, path, schema = None, project = None):
         """
@@ -1245,28 +1282,33 @@ class LabDatabase:
             (monthly_dir, now.strftime("%Y%m"), True),
         ]
 
+        warnings = []
+
         for directory, period, keep_existing in backup_periods:
-            self.save_backup(
+            
+            success_pg = self.save_backup(
                 directory / f"{period}.dump",
-                lambda path: self.write_postgresql_dump(
-                    path, schema=schema, project=project
-                ),
+                lambda path: self.write_postgresql_dump(path, schema=schema, project=project),
                 keep_existing=keep_existing,
             )
-            self.save_backup(
+            if not success_pg:
+                warnings.append(f"PostgreSQL dump failed for {period} (is pg_dump installed?)")
+            
+            success_sq = self.save_backup(
                 directory / f"{period}.sqlite3",
-                lambda path: self.write_sqlite_export(
-                    path, schema=schema, project=project
-                ),
+                lambda path: self.write_sqlite_export(path, schema=schema, project=project),
                 keep_existing=keep_existing,
             )
-            self.save_backup(
+            if not success_sq:
+                warnings.append(f"SQLite export failed for {period}")
+            
+            success_ex = self.save_backup(
                 directory / f"{period}.xlsx",
-                lambda path: self.write_excel_export(
-                    path, schema=schema, project=project
-                ),
+                lambda path: self.write_excel_export(path, schema=schema, project=project),
                 keep_existing=keep_existing,
             )
+            if not success_ex:
+                warnings.append(f"Excel export failed for {period}")
 
         for extension in (".dump", ".sqlite3", ".xlsx"):
             self._rotate_backups(
@@ -1276,7 +1318,7 @@ class LabDatabase:
                 max_backups=5,
             )
         
-        pass
+        return warnings
 
 if __name__ == "__main__":
     try:
