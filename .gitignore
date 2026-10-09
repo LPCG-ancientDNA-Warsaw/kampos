@@ -9,4 +9,5 @@ settings.json
 *xlsx
 *sqlite3
 !default*xlsx
+!*_upload.xlsx
 *.pyc
