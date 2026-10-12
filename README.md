@@ -34,4 +34,6 @@ On another note, we are taking suggestions to change the name. You can edit this
 - Lustro: easy-to-pronounce word that means "5 years" (in latin), referencing to the 5 rotating backups, and "mirror" (in polish), referencing the fact that the tool gives a nice, clear, user view of the database.
 - Arkìo: archeio is the greek word for archive. It is pronounced as arhìo (almost like the polish ch sound) and with the accent on the i. This sound, though, could be hard to guess from the spelling and pronounced by romance-languages speaking people (yes, I am talking specifically about italian) so I would go with a slightly different spelling and pronunciation;
 - Testa: italian word for head, which references the fact that this tool helps us keep all important info in our mind.
-- Charybdis: mythological sea monster close to Sicily.
+- Charybdis: mythological sea monster close to Sicily;
+- Nawia: the underworld in slavic mythology.
+  
